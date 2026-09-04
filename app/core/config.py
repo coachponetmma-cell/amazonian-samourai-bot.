@@ -1,4 +1,4 @@
-import os
+﻿import os
 from functools import lru_cache
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -49,3 +49,4 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+

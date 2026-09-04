@@ -1,4 +1,4 @@
-from typing import List, Optional
+﻿from typing import List, Optional
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from app.models.schemas import Exercise, AthleteProfile, ReadinessStatus
@@ -19,21 +19,21 @@ class FilterExercisesResponse(BaseModel):
     excluded_reasons: List[str]
 
 
-@router.get("/exercises", response_model=List[Exercise], summary="Récupération du catalogue d'exercices")
-async def get_exercises(category: Optional[str] = Query(None, description="Filtrer par catégorie")):
+@router.get("/exercises", response_model=List[Exercise], summary="RÃ©cupÃ©ration du catalogue d'exercices")
+async def get_exercises(category: Optional[str] = Query(None, description="Filtrer par catÃ©gorie")):
     """
-    Récupère la liste des exercices disponibles (depuis Supabase ou catalogue local fallback).
+    RÃ©cupÃ¨re la liste des exercices disponibles (depuis Supabase ou catalogue local fallback).
     """
     if category:
         return await ExerciseService.get_exercises_by_category(category)
     return await ExerciseService.get_all_exercises()
 
 
-@router.post("/exercises/filter", response_model=FilterExercisesResponse, summary="Filtrage strict par équipement, blessures et Readiness")
+@router.post("/exercises/filter", response_model=FilterExercisesResponse, summary="Filtrage strict par Ã©quipement, blessures et Readiness")
 async def filter_exercises(payload: FilterExercisesRequest):
     """
-    Applique les HARD Rules pour exclure les exercices incompatibles avec l'équipement,
-    les blessures déclarées ou le statut de fatigue.
+    Applique les HARD Rules pour exclure les exercices incompatibles avec l'Ã©quipement,
+    les blessures dÃ©clarÃ©es ou le statut de fatigue.
     """
     all_exercises = await ExerciseService.get_all_exercises()
     if payload.category:
@@ -47,10 +47,11 @@ async def filter_exercises(payload: FilterExercisesRequest):
     return FilterExercisesResponse(valid_exercises=valid, excluded_reasons=exclusions)
 
 
-@router.post("/exercises/seed", summary="Injection du catalogue par défaut dans Supabase")
+@router.post("/exercises/seed", summary="Injection du catalogue par dÃ©faut dans Supabase")
 async def seed_exercises():
     """
-    Injecte les exercices de base (MMA, Striking, Plyo, Mobilité) dans la table 'exercises' de Supabase.
+    Injecte les exercices de base (MMA, Striking, Plyo, MobilitÃ©) dans la table 'exercises' de Supabase.
     """
     count = await ExerciseService.seed_exercises_to_supabase()
     return {"status": "success", "exercises_seeded": count}
+

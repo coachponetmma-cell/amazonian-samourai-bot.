@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from typing import Optional
 from supabase import create_client, Client
 from app.core.config import settings
@@ -13,7 +13,7 @@ class SupabaseService:
     def get_client(cls) -> Optional[Client]:
         """
         Retourne une instance singleton du client Supabase.
-        Renvoie None si l'URL ou la clé ne sont pas encore configurées.
+        Renvoie None si l'URL ou la clÃ© ne sont pas encore configurÃ©es.
         """
         if cls._instance is not None:
             return cls._instance
@@ -36,3 +36,4 @@ class SupabaseService:
 
 def get_supabase_client() -> Optional[Client]:
     return SupabaseService.get_client()
+

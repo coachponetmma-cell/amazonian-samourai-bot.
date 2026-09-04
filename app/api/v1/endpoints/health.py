@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+﻿from fastapi import APIRouter
 from app.core.config import settings
 from app.core.supabase import get_supabase_client
 
@@ -14,3 +14,4 @@ async def health_check():
         "supabase_connected": supabase_client is not None,
         "version": "2.0.0"
     }
+

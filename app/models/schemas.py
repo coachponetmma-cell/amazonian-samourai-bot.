@@ -1,4 +1,4 @@
-from enum import Enum
+﻿from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -12,19 +12,19 @@ class ReadinessStatus(str, Enum):
 class TierLevel(int, Enum):
     TIER_1 = 1  # 100% IA
     TIER_2 = 2  # Hybride (2 visios/mois)
-    TIER_3 = 3  # Élite Pro (1 visio/semaine)
+    TIER_3 = 3  # Ã‰lite Pro (1 visio/semaine)
 
 
 class DailyCheckinInput(BaseModel):
     """
-    Entrée d'un Check-in quotidien (1 à 5).
+    EntrÃ©e d'un Check-in quotidien (1 Ã  5).
     """
     athlete_id: Optional[str] = None
-    sleep_score: int = Field(..., ge=1, le=5, description="1 (Très mauvais) à 5 (Excellent)")
-    energy_score: int = Field(..., ge=1, le=5, description="1 (À plat) à 5 (Explosif)")
-    fatigue_score: int = Field(..., ge=1, le=5, description="1 (Aucune) à 5 (Épuisement total)")
-    stress_score: int = Field(..., ge=1, le=5, description="1 (Zen) à 5 (Extrême)")
-    soreness_score: int = Field(..., ge=1, le=5, description="1 (Aucune) à 5 (Douleur aiguë)")
+    sleep_score: int = Field(..., ge=1, le=5, description="1 (TrÃ¨s mauvais) Ã  5 (Excellent)")
+    energy_score: int = Field(..., ge=1, le=5, description="1 (Ã€ plat) Ã  5 (Explosif)")
+    fatigue_score: int = Field(..., ge=1, le=5, description="1 (Aucune) Ã  5 (Ã‰puisement total)")
+    stress_score: int = Field(..., ge=1, le=5, description="1 (Zen) Ã  5 (ExtrÃªme)")
+    soreness_score: int = Field(..., ge=1, le=5, description="1 (Aucune) Ã  5 (Douleur aiguÃ«)")
     soreness_locations: List[str] = Field(default_factory=list, description="Ex: ['knee_left', 'shoulder_right']")
     raw_audio_url: Optional[str] = None
     raw_text: Optional[str] = None
@@ -32,20 +32,20 @@ class DailyCheckinInput(BaseModel):
 
 class ReadinessResult(BaseModel):
     """
-    Résultat du calcul de Readiness (R) et décisions associées.
+    RÃ©sultat du calcul de Readiness (R) et dÃ©cisions associÃ©es.
     """
-    score: float = Field(..., description="Score R calculé (1.0 à 5.0)")
+    score: float = Field(..., description="Score R calculÃ© (1.0 Ã  5.0)")
     status: ReadinessStatus = Field(..., description="VERT, ORANGE ou ROUGE")
-    details: Dict[str, float] = Field(..., description="Détail pondéré de chaque métrique")
-    alerts: List[str] = Field(default_factory=list, description="Alertes de sécurité détectées")
-    intensity_cap_rpe: Optional[int] = Field(default=None, description="Plafond RPE maximal recommandé")
+    details: Dict[str, float] = Field(..., description="DÃ©tail pondÃ©rÃ© de chaque mÃ©trique")
+    alerts: List[str] = Field(default_factory=list, description="Alertes de sÃ©curitÃ© dÃ©tectÃ©es")
+    intensity_cap_rpe: Optional[int] = Field(default=None, description="Plafond RPE maximal recommandÃ©")
     volume_multiplier: float = Field(default=1.0, description="Multiplicateur de volume (ex: 0.8 pour -20%)")
-    recommendation: str = Field(..., description="Consigne d'entraînement pour l'athlète")
+    recommendation: str = Field(..., description="Consigne d'entraÃ®nement pour l'athlÃ¨te")
 
 
 class AthleteProfile(BaseModel):
     """
-    Profil athlète, matériel possédé et restrictions.
+    Profil athlÃ¨te, matÃ©riel possÃ©dÃ© et restrictions.
     """
     athlete_id: str
     telegram_id: int
@@ -61,7 +61,7 @@ class AthleteProfile(BaseModel):
 
 class Exercise(BaseModel):
     """
-    Modèle d'exercice correspondant aux 49 exercices du fichier Coaching_IA_Base_V1.
+    ModÃ¨le d'exercice correspondant aux 49 exercices du fichier Coaching_IA_Base_V1.
     """
     id: Optional[str] = None
     code_id: Optional[str] = None
@@ -69,7 +69,7 @@ class Exercise(BaseModel):
     family: Optional[str] = "Force"
     subfamily: Optional[str] = None
     discipline: Optional[str] = "Musculation"
-    level: Optional[str] = "Débutant"
+    level: Optional[str] = "DÃ©butant"
     objective: Optional[str] = None
     material: Optional[str] = "Aucun"
     main_zone: Optional[str] = None
@@ -87,16 +87,16 @@ class Exercise(BaseModel):
     tags: Optional[str] = None
     video_url: Optional[str] = None
 
-    # Champs de compatibilité pour les appels historiques du moteur de règles.
+    # Champs de compatibilitÃ© pour les appels historiques du moteur de rÃ¨gles.
     # Ils acceptent category / required_equipment / contraindicated_for sans
-    # modifier le format stocké dans la table exercises.
+    # modifier le format stockÃ© dans la table exercises.
     legacy_category: Optional[str] = Field(default=None, alias="category", exclude=True)
     legacy_required_equipment: Optional[List[str]] = Field(default=None, alias="required_equipment", exclude=True)
     legacy_contraindicated_for: Optional[List[str]] = Field(default=None, alias="contraindicated_for", exclude=True)
 
     model_config = ConfigDict(populate_by_name=True)
 
-    # Compatibilité avec l'ancien schéma
+    # CompatibilitÃ© avec l'ancien schÃ©ma
     @property
     def category(self) -> str:
         return self.legacy_category or self.subfamily or self.family or "Musculation"
@@ -113,7 +113,7 @@ class Exercise(BaseModel):
             return self.legacy_required_equipment
         if self.material and self.material.lower() not in ["aucun", "none"]:
             return [m.strip() for m in self.material.replace("/", ",").split(",") if m.strip()]
-        # Aucun matériel requis : ce n'est pas une exigence "bodyweight" ou "aucun".
+        # Aucun matÃ©riel requis : ce n'est pas une exigence "bodyweight" ou "aucun".
         return []
 
     @property
@@ -166,3 +166,4 @@ class WorkoutPlan(BaseModel):
     total_estimated_minutes: int
     coach_notes: str
     adjustment: Optional[WorkoutAdjustment] = None
+

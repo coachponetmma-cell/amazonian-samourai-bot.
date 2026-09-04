@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from typing import List, Tuple, Dict, Any, Optional
 from app.core.config import settings
 from app.models.schemas import (
@@ -16,24 +16,24 @@ logger = logging.getLogger(__name__)
 
 class RulesEngine:
     """
-    Moteur de règles et de calcul de sécurité pour Coaching IA V2.
-    Gère la Readiness R, les seuils d'intensité et le filtrage strict (HARD Rules).
+    Moteur de rÃ¨gles et de calcul de sÃ©curitÃ© pour Coaching IA V2.
+    GÃ¨re la Readiness R, les seuils d'intensitÃ© et le filtrage strict (HARD Rules).
     """
 
     @classmethod
     def calculate_readiness(cls, checkin: DailyCheckinInput) -> ReadinessResult:
         """
-        Calcule le score de Readiness R (1.0 à 5.0) et détermine le statut (VERT, ORANGE, ROUGE).
+        Calcule le score de Readiness R (1.0 Ã  5.0) et dÃ©termine le statut (VERT, ORANGE, ROUGE).
         
         Formule :
-        R = 0.25*Sommeil + 0.25*Énergie + 0.20*(6 - Fatigue) + 0.15*(6 - Stress) + 0.15*(6 - Douleur)
+        R = 0.25*Sommeil + 0.25*Ã‰nergie + 0.20*(6 - Fatigue) + 0.15*(6 - Stress) + 0.15*(6 - Douleur)
         """
-        # Facteurs inversés pour les métriques négatives (1=Top, 5=Pire)
+        # Facteurs inversÃ©s pour les mÃ©triques nÃ©gatives (1=Top, 5=Pire)
         inv_fatigue = 6.0 - float(checkin.fatigue_score)
         inv_stress = 6.0 - float(checkin.stress_score)
         inv_soreness = 6.0 - float(checkin.soreness_score)
 
-        # Calcul pondéré
+        # Calcul pondÃ©rÃ©
         w_sleep = settings.WEIGHT_SLEEP * float(checkin.sleep_score)
         w_energy = settings.WEIGHT_ENERGY * float(checkin.energy_score)
         w_fatigue = settings.WEIGHT_FATIGUE * inv_fatigue
@@ -52,33 +52,33 @@ class RulesEngine:
             "soreness_weighted": round(w_soreness, 2),
         }
 
-        # Détection des alertes spécifiques
+        # DÃ©tection des alertes spÃ©cifiques
         if checkin.soreness_score >= settings.SORENESS_RED_THRESHOLD:
             locs = f" ({', '.join(checkin.soreness_locations)})" if checkin.soreness_locations else ""
-            alerts.append(f"Douleur aiguë signalée : {checkin.soreness_score}/5{locs}.")
+            alerts.append(f"Douleur aiguÃ« signalÃ©e : {checkin.soreness_score}/5{locs}.")
 
         if checkin.sleep_score <= 2:
-            alerts.append(f"Sommeil dégradé : {checkin.sleep_score}/5.")
+            alerts.append(f"Sommeil dÃ©gradÃ© : {checkin.sleep_score}/5.")
 
         if checkin.fatigue_score >= 4:
-            alerts.append(f"Fatigue nerveuse élevée : {checkin.fatigue_score}/5.")
+            alerts.append(f"Fatigue nerveuse Ã©levÃ©e : {checkin.fatigue_score}/5.")
 
-        # Détermination du statut de sécurité
+        # DÃ©termination du statut de sÃ©curitÃ©
         if checkin.soreness_score >= settings.SORENESS_RED_THRESHOLD or score < settings.THRESHOLD_ORANGE:
             status = ReadinessStatus.RED
             volume_multiplier = 0.0
             intensity_cap_rpe = 4
             recommendation = (
-                "MODE ROUGE - Récupération active et mobilité uniquement. "
-                "Séance d'intensité proscrite pour prévenir le surentraînement ou la blessure."
+                "MODE ROUGE - RÃ©cupÃ©ration active et mobilitÃ© uniquement. "
+                "SÃ©ance d'intensitÃ© proscrite pour prÃ©venir le surentraÃ®nement ou la blessure."
             )
         elif score < settings.THRESHOLD_GREEN:
             status = ReadinessStatus.ORANGE
-            volume_multiplier = 0.80  # Réduction de 20% du volume
+            volume_multiplier = 0.80  # RÃ©duction de 20% du volume
             intensity_cap_rpe = 7
             recommendation = (
-                "MODE ORANGE - Régulation / Maintien. "
-                "Volume réduit de 20% et intensité plafonnée à RPE 7. Priorité technique et propreté du geste."
+                "MODE ORANGE - RÃ©gulation / Maintien. "
+                "Volume rÃ©duit de 20% et intensitÃ© plafonnÃ©e Ã  RPE 7. PrioritÃ© technique et propretÃ© du geste."
             )
         else:
             status = ReadinessStatus.GREEN
@@ -86,7 +86,7 @@ class RulesEngine:
             intensity_cap_rpe = None
             recommendation = (
                 "MODE VERT - Feu vert complet. "
-                "Séance à 100% du volume et intensité cible programmée. Warrior mode engagé."
+                "SÃ©ance Ã  100% du volume et intensitÃ© cible programmÃ©e. Warrior mode engagÃ©."
             )
 
         return ReadinessResult(
@@ -108,9 +108,9 @@ class RulesEngine:
     ) -> Tuple[List[Exercise], List[str]]:
         """
         Filtre strictement une liste d'exercices selon :
-        1. Matériel possédé par l'athlète (HARD Rule 1)
-        2. Blessures et contre-indications déclarées (HARD Rule 2)
-        3. Statut Readiness R (Mode ROUGE -> Mobilité / Récupération uniquement)
+        1. MatÃ©riel possÃ©dÃ© par l'athlÃ¨te (HARD Rule 1)
+        2. Blessures et contre-indications dÃ©clarÃ©es (HARD Rule 2)
+        3. Statut Readiness R (Mode ROUGE -> MobilitÃ© / RÃ©cupÃ©ration uniquement)
         
         Retourne (exercices_valides, raisons_exclusions).
         """
@@ -125,15 +125,15 @@ class RulesEngine:
         athlete_constraints = {c.strip().lower() for c in profile.injuries_and_constraints}
 
         for ex in exercises:
-            # 1. Vérification du matériel requis
+            # 1. VÃ©rification du matÃ©riel requis
             ex_equipment = [eq.strip().lower() for eq in ex.required_equipment if eq.strip()]
             missing_equipment = [eq for eq in ex_equipment if eq not in available_equipment]
             if missing_equipment:
-                msg = f"'{ex.name}' exclu : matériel manquant ({', '.join(missing_equipment)})"
+                msg = f"'{ex.name}' exclu : matÃ©riel manquant ({', '.join(missing_equipment)})"
                 exclusion_reasons.append(msg)
                 continue
 
-            # 2. Vérification des contre-indications / blessures
+            # 2. VÃ©rification des contre-indications / blessures
             contraindications = [c.strip().lower() for c in ex.contraindicated_for if c.strip()]
             conflict = athlete_constraints.intersection(set(contraindications))
             if conflict:
@@ -141,11 +141,11 @@ class RulesEngine:
                 exclusion_reasons.append(msg)
                 continue
 
-            # 3. Filtrage selon le statut Readiness (RED = Mobilité / Récupération uniquement)
+            # 3. Filtrage selon le statut Readiness (RED = MobilitÃ© / RÃ©cupÃ©ration uniquement)
             if readiness_status == ReadinessStatus.RED:
                 allowed_categories = {"mobility", "recovery", "stretching", "core"}
                 if ex.category.strip().lower() not in allowed_categories:
-                    msg = f"'{ex.name}' exclu : non autorisé en statut ROUGE (catégorie: {ex.category})"
+                    msg = f"'{ex.name}' exclu : non autorisÃ© en statut ROUGE (catÃ©gorie: {ex.category})"
                     exclusion_reasons.append(msg)
                     continue
 
@@ -160,7 +160,7 @@ class RulesEngine:
         readiness_result: ReadinessResult
     ) -> Tuple[List[WorkoutExercise], WorkoutAdjustment]:
         """
-        Ajuste les séries, répétitions et RPE d'une séance selon le résultat de Readiness.
+        Ajuste les sÃ©ries, rÃ©pÃ©titions et RPE d'une sÃ©ance selon le rÃ©sultat de Readiness.
         """
         adjusted_list: List[WorkoutExercise] = []
         safety_reasons: List[str] = []
@@ -170,30 +170,30 @@ class RulesEngine:
         cap_rpe = readiness_result.intensity_cap_rpe
 
         for we in workout_exercises:
-            # En mode ROUGE, les exercices de force/explosivité sont convertis ou annulés
+            # En mode ROUGE, les exercices de force/explosivitÃ© sont convertis ou annulÃ©s
             if readiness_result.status == ReadinessStatus.RED:
                 if we.exercise.category.strip().lower() not in {"mobility", "recovery", "stretching"}:
                     excluded_names.append(we.exercise.name)
-                    safety_reasons.append(f"Exercice '{we.exercise.name}' annulé en raison du statut ROUGE.")
+                    safety_reasons.append(f"Exercice '{we.exercise.name}' annulÃ© en raison du statut ROUGE.")
                     continue
 
-            # Ajustement du volume (nombre de séries)
+            # Ajustement du volume (nombre de sÃ©ries)
             adjusted_sets = we.sets
             if vol_mult < 1.0 and vol_mult > 0.0:
                 adjusted_sets = max(1, round(we.sets * vol_mult))
                 if adjusted_sets < we.sets:
-                    safety_reasons.append(f"{we.exercise.name}: séries réduites de {we.sets} à {adjusted_sets} (-20% volume).")
+                    safety_reasons.append(f"{we.exercise.name}: sÃ©ries rÃ©duites de {we.sets} Ã  {adjusted_sets} (-20% volume).")
 
             # Plafonnement du RPE
             adjusted_rpe = we.target_rpe
             if cap_rpe is not None and adjusted_rpe > cap_rpe:
-                safety_reasons.append(f"{we.exercise.name}: RPE plafonné de {adjusted_rpe} à {cap_rpe}.")
+                safety_reasons.append(f"{we.exercise.name}: RPE plafonnÃ© de {adjusted_rpe} Ã  {cap_rpe}.")
                 adjusted_rpe = cap_rpe
 
             adjusted_item = we.model_copy(update={
                 "sets": adjusted_sets,
                 "target_rpe": adjusted_rpe,
-                "notes": f"{we.notes or ''} [Ajusté: {readiness_result.status.value}]".strip()
+                "notes": f"{we.notes or ''} [AjustÃ©: {readiness_result.status.value}]".strip()
             })
             adjusted_list.append(adjusted_item)
 
@@ -205,3 +205,4 @@ class RulesEngine:
         )
 
         return adjusted_list, adjustment
+

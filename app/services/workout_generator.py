@@ -1,4 +1,4 @@
-import json
+﻿import json
 import urllib.parse
 import logging
 from typing import List, Optional, Dict
@@ -24,64 +24,64 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
-# SCHÉMAS DE SORTIE STRUCTURÉE POUR LE LLM GEMINI
+# SCHÃ‰MAS DE SORTIE STRUCTURÃ‰E POUR LE LLM GEMINI
 # ==============================================================================
 class LLMExerciseItem(BaseModel):
     exercise_name: str = Field(..., description="Nom exact de l'exercice choisi parmi les 49 exercices disponibles")
-    sets: int = Field(..., description="Nombre de séries (ex: 2 pour échauffement, 3-4 pour corps de séance, 2-3 pour renfo/core)")
+    sets: int = Field(..., description="Nombre de sÃ©ries (ex: 2 pour Ã©chauffement, 3-4 pour corps de sÃ©ance, 2-3 pour renfo/core)")
     reps_or_duration: str = Field(..., description="Ex: '8-10 reps', '45 s', '12/jambe', '60 s'")
-    target_rpe: int = Field(..., description="Intensité RPE de 1 à 10 (Plafonné à 7 en ORANGE, 4 en ROUGE)")
-    tempo: str = Field(default="2-0-1-0", description="Tempo d'exécution (ex: '2-0-1-0', 'Explosif', 'Contrôlé', 'Fluide')")
-    rest_seconds: int = Field(default=60, description="Temps de repos en secondes entre les séries (ex: 45, 60, 90)")
-    coach_cue: str = Field(..., description="Consigne technique et mot d'attention personnalisé de Jason Ponet")
+    target_rpe: int = Field(..., description="IntensitÃ© RPE de 1 Ã  10 (PlafonnÃ© Ã  7 en ORANGE, 4 en ROUGE)")
+    tempo: str = Field(default="2-0-1-0", description="Tempo d'exÃ©cution (ex: '2-0-1-0', 'Explosif', 'ContrÃ´lÃ©', 'Fluide')")
+    rest_seconds: int = Field(default=60, description="Temps de repos en secondes entre les sÃ©ries (ex: 45, 60, 90)")
+    coach_cue: str = Field(..., description="Consigne technique et mot d'attention personnalisÃ© de Jason Ponet")
 
 
 class LLMBlockItem(BaseModel):
     block_number: int = Field(..., description="1, 2 ou 3")
-    title: str = Field(..., description="Titre du bloc (ex: 'BLOC 1 : ÉCHAUFFEMENT & MOBILITÉ DYNAMIQUE')")
-    focus: str = Field(..., description="Focus du bloc (ex: 'Mobilité vertébrale, ouverture de hanches et mise en route')")
+    title: str = Field(..., description="Titre du bloc (ex: 'BLOC 1 : Ã‰CHAUFFEMENT & MOBILITÃ‰ DYNAMIQUE')")
+    focus: str = Field(..., description="Focus du bloc (ex: 'MobilitÃ© vertÃ©brale, ouverture de hanches et mise en route')")
     target_rpe_range: str = Field(..., description="Fourchette RPE (ex: 'RPE 4-5', 'RPE 7 Max', 'RPE 8-9')")
     exercises: List[LLMExerciseItem] = Field(..., description="Liste des exercices (2 pour Bloc 1, 3 pour Bloc 2, 2 pour Bloc 3)")
 
 
 class LLMWorkoutResponse(BaseModel):
-    title: str = Field(..., description="Titre percutant et adapté de la séance")
-    focus: str = Field(..., description="Objectif principal de la séance du jour")
-    total_estimated_minutes: int = Field(..., description="Durée estimée de la séance (40-45 min en Orange, ~50 min en Vert, ~30 min en Rouge)")
-    coach_speech: str = Field(..., description="Mot d'encouragement de Jason Ponet (Warrior mindset, direct, technique, personnalisé)")
+    title: str = Field(..., description="Titre percutant et adaptÃ© de la sÃ©ance")
+    focus: str = Field(..., description="Objectif principal de la sÃ©ance du jour")
+    total_estimated_minutes: int = Field(..., description="DurÃ©e estimÃ©e de la sÃ©ance (40-45 min en Orange, ~50 min en Vert, ~30 min en Rouge)")
+    coach_speech: str = Field(..., description="Mot d'encouragement de Jason Ponet (Warrior mindset, direct, technique, personnalisÃ©)")
     blocks: List[LLMBlockItem] = Field(..., description="Les 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exercices, Bloc 3: 2 exercices)")
 
 
 WORKOUT_GENERATION_SYSTEM_PROMPT = """
 Tu es Jason Ponet (Amazonian Samourai), combattant pro de MMA et Head Coach international.
-Tu conçois une séance d'entraînement UNIQUE, SCIENTIFIQUEMENT STRUCTURÉE et SUR-MESURE pour l'athlète à partir de son check-in du jour.
+Tu conÃ§ois une sÃ©ance d'entraÃ®nement UNIQUE, SCIENTIFIQUEMENT STRUCTURÃ‰E et SUR-MESURE pour l'athlÃ¨te Ã  partir de son check-in du jour.
 
-### RÈGLES DE CONCEPTION DE LA SÉANCE (3 BLOCS OBLIGATOIRES - 7 EXERCICES AU TOTAL) :
-1. **BLOC 1 : ÉCHAUFFEMENT / MOBILITÉ DYNAMIQUE (EXACTEMENT 2 exercices)**
-   - Choisis 2 exercices parmi la famille 'Mobilité' ou échauffement articulaire (ex: World's Greatest Stretch, Cat-Cow, Mobilité des hanches 90/90, Ouverture thoracique, Mobilité des chevilles).
-   - Intensité : RPE 4-5, 2 séries, tempo fluide.
+### RÃˆGLES DE CONCEPTION DE LA SÃ‰ANCE (3 BLOCS OBLIGATOIRES - 7 EXERCICES AU TOTAL) :
+1. **BLOC 1 : Ã‰CHAUFFEMENT / MOBILITÃ‰ DYNAMIQUE (EXACTEMENT 2 exercices)**
+   - Choisis 2 exercices parmi la famille 'MobilitÃ©' ou Ã©chauffement articulaire (ex: World's Greatest Stretch, Cat-Cow, MobilitÃ© des hanches 90/90, Ouverture thoracique, MobilitÃ© des chevilles).
+   - IntensitÃ© : RPE 4-5, 2 sÃ©ries, tempo fluide.
 
-2. **BLOC 2 : CORPS DE SÉANCE / CONDITIONING & FORCE (EXACTEMENT 3 exercices)**
-   - Choisis 3 exercices parmi 'Force (Bas du corps)', 'Force (Haut du corps poussée)', 'Force (Haut du corps tirage)', 'Full Body', 'Boxe' ou 'Cardio'.
-   - **En statut VERT (R >= 3.8) :** Intensité haute (RPE 8-9), 3 à 4 séries, puissance et explosivité.
-   - **En statut ORANGE (2.5 <= R < 3.8) :** Régulation (-20% volume), 3 séries, INTENSITÉ PLAFONNÉE À RPE 7 STRICT. Zéro échec musculaire.
-   - **En statut ROUGE (R < 2.5 ou Douleur >= 4) :** Mobilité, décharge articulaire et flux sanguin uniquement (RPE 3-4, zéro charge lourde).
+2. **BLOC 2 : CORPS DE SÃ‰ANCE / CONDITIONING & FORCE (EXACTEMENT 3 exercices)**
+   - Choisis 3 exercices parmi 'Force (Bas du corps)', 'Force (Haut du corps poussÃ©e)', 'Force (Haut du corps tirage)', 'Full Body', 'Boxe' ou 'Cardio'.
+   - **En statut VERT (R >= 3.8) :** IntensitÃ© haute (RPE 8-9), 3 Ã  4 sÃ©ries, puissance et explosivitÃ©.
+   - **En statut ORANGE (2.5 <= R < 3.8) :** RÃ©gulation (-20% volume), 3 sÃ©ries, INTENSITÃ‰ PLAFONNÃ‰E Ã€ RPE 7 STRICT. ZÃ©ro Ã©chec musculaire.
+   - **En statut ROUGE (R < 2.5 ou Douleur >= 4) :** MobilitÃ©, dÃ©charge articulaire et flux sanguin uniquement (RPE 3-4, zÃ©ro charge lourde).
 
 3. **BLOC 3 : RENFORCEMENT, CORE & POSTURE (EXACTEMENT 2 exercices)**
-   - Choisis 2 exercices parmi la famille 'Gainage', 'Core', 'Mobilité' ou renforcement postural (ex: Plank, Side Plank, Bird Dog, Dead Bug, Mountain Climbers, etc.).
-   - Intensité : RPE 6-7, 2 à 3 séries.
+   - Choisis 2 exercices parmi la famille 'Gainage', 'Core', 'MobilitÃ©' ou renforcement postural (ex: Plank, Side Plank, Bird Dog, Dead Bug, Mountain Climbers, etc.).
+   - IntensitÃ© : RPE 6-7, 2 Ã  3 sÃ©ries.
 
-4. **SÉLECTION STRICTE DANS LE CATALOGUE DES 49 EXERCICES :**
-   - Utilise UNIQUEMENT les noms exacts d'exercices présents dans la liste fournie ci-dessous afin que les liens vidéos YouTube réels soient automatiquement associés.
-   - Adapte le choix des exercices aux éventuelles douleurs ou blessures déclarées par l'athlète (ex: pas de Box Jump ou Walking Lunge si mal aux genoux, pas de Développé militaire si douleur épaule).
+4. **SÃ‰LECTION STRICTE DANS LE CATALOGUE DES 49 EXERCICES :**
+   - Utilise UNIQUEMENT les noms exacts d'exercices prÃ©sents dans la liste fournie ci-dessous afin que les liens vidÃ©os YouTube rÃ©els soient automatiquement associÃ©s.
+   - Adapte le choix des exercices aux Ã©ventuelles douleurs ou blessures dÃ©clarÃ©es par l'athlÃ¨te (ex: pas de Box Jump ou Walking Lunge si mal aux genoux, pas de DÃ©veloppÃ© militaire si douleur Ã©paule).
 
-Réponds EXCLUSIVEMENT avec le format JSON respectant le schéma attendu.
+RÃ©ponds EXCLUSIVEMENT avec le format JSON respectant le schÃ©ma attendu.
 """
 
 
 class WorkoutGenerator:
     """
-    Générateur de séances personnalisé propulsé par Gemini 3.6 Flash et le catalogue des 49 exercices réels.
+    GÃ©nÃ©rateur de sÃ©ances personnalisÃ© propulsÃ© par Gemini 3.6 Flash et le catalogue des 49 exercices rÃ©els.
     """
 
     @classmethod
@@ -103,7 +103,7 @@ class WorkoutGenerator:
         raw_checkin_text: Optional[str] = None
     ) -> WorkoutPlan:
         """
-        Génère une séance sur-mesure via Gemini en piochant dans les 49 exercices de la base.
+        GÃ©nÃ¨re une sÃ©ance sur-mesure via Gemini en piochant dans les 49 exercices de la base.
         """
         if candidate_exercises is None:
             candidate_exercises = await ExerciseService.get_all_exercises()
@@ -122,14 +122,14 @@ class WorkoutGenerator:
             if ex.code_id:
                 exercise_map[ex.code_id.lower().strip()] = ex
 
-        # Résumé du catalogue pour le prompt
+        # RÃ©sumÃ© du catalogue pour le prompt
         catalog_by_family: Dict[str, List[str]] = {}
         for ex in valid_exercises:
             fam = f"{ex.family} - {ex.subfamily}" if ex.subfamily else ex.family
-            catalog_by_family.setdefault(fam, []).append(f"{ex.name} (Matériel: {ex.material})")
+            catalog_by_family.setdefault(fam, []).append(f"{ex.name} (MatÃ©riel: {ex.material})")
 
         catalog_summary = "\n".join([
-            f"• **{fam}** : {', '.join(items)}" for fam, items in catalog_by_family.items()
+            f"â€¢ **{fam}** : {', '.join(items)}" for fam, items in catalog_by_family.items()
         ])
 
         # Appel LLM Gemini
@@ -141,22 +141,22 @@ class WorkoutGenerator:
                 from google.genai import types
 
                 user_prompt = f"""
-ATHLÈTE :
-- **Nom :** {profile.first_name or 'Athlète'}
+ATHLÃˆTE :
+- **Nom :** {profile.first_name or 'AthlÃ¨te'}
 - **Objectif :** {profile.goal}
-- **Matériel possédé :** {', '.join(profile.available_equipment) if profile.available_equipment else 'Aucun (Poids du corps)'}
+- **MatÃ©riel possÃ©dÃ© :** {', '.join(profile.available_equipment) if profile.available_equipment else 'Aucun (Poids du corps)'}
 - **Blessures / Contraintes :** {', '.join(profile.injuries_and_constraints) if profile.injuries_and_constraints else 'Aucune'}
 
 CHECK-IN DU JOUR :
 - **Message / Ressenti :** "{raw_checkin_text or 'Check-in standard'}"
 - **Score Readiness (R) :** {readiness.score}/5.0
-- **Statut de Sécurité :** {readiness.status.value} (Plafond RPE: {readiness.intensity_cap_rpe or 'Libre'}, Vol Multiplier: {readiness.volume_multiplier})
-- **Alertes de Sécurité :** {', '.join(readiness.alerts) if readiness.alerts else 'Aucune'}
+- **Statut de SÃ©curitÃ© :** {readiness.status.value} (Plafond RPE: {readiness.intensity_cap_rpe or 'Libre'}, Vol Multiplier: {readiness.volume_multiplier})
+- **Alertes de SÃ©curitÃ© :** {', '.join(readiness.alerts) if readiness.alerts else 'Aucune'}
 
-CATALOGUE DES 49 EXERCICES DISPONIBLES ET VALIDÉS :
+CATALOGUE DES 49 EXERCICES DISPONIBLES ET VALIDÃ‰S :
 {catalog_summary}
 
-Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exercices, Bloc 3: 2 exercices) parfaitement adaptée à l'état du jour.
+GÃ©nÃ¨re la sÃ©ance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exercices, Bloc 3: 2 exercices) parfaitement adaptÃ©e Ã  l'Ã©tat du jour.
 """
 
                 response = gemini_client.models.generate_content(
@@ -171,10 +171,10 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
 
                 parsed_json = json.loads(response.text)
                 llm_response = LLMWorkoutResponse(**parsed_json)
-                logger.info("Séance générée avec succès par Gemini 3.6 Flash.")
+                logger.info("SÃ©ance gÃ©nÃ©rÃ©e avec succÃ¨s par Gemini 3.6 Flash.")
 
             except Exception as e:
-                logger.error(f"Erreur génération Gemini: {e}")
+                logger.error(f"Erreur gÃ©nÃ©ration Gemini: {e}")
                 llm_response = None
 
         blocks: List[WorkoutBlock] = []
@@ -210,7 +210,7 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
                             instructions=ex_item.coach_cue
                         )
 
-                    # Plafonnement de sécurité
+                    # Plafonnement de sÃ©curitÃ©
                     target_rpe = ex_item.target_rpe
                     if readiness.intensity_cap_rpe and target_rpe > readiness.intensity_cap_rpe:
                         target_rpe = readiness.intensity_cap_rpe
@@ -239,19 +239,19 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
 
         else:
             # Fallback direct si API indisponible
-            title = f"{'🟢' if readiness.status == ReadinessStatus.GREEN else ('🟡' if readiness.status == ReadinessStatus.ORANGE else '🔴')} SÉANCE {readiness.status.value} - COACHING AMAZONIAN SAMOURAI"
-            focus = "Conditioning, renforcement et mobilité"
+            title = f"{'ðŸŸ¢' if readiness.status == ReadinessStatus.GREEN else ('ðŸŸ¡' if readiness.status == ReadinessStatus.ORANGE else 'ðŸ”´')} SÃ‰ANCE {readiness.status.value} - COACHING AMAZONIAN SAMOURAI"
+            focus = "Conditioning, renforcement et mobilitÃ©"
             total_minutes = 45 if readiness.status != ReadinessStatus.RED else 30
-            coach_notes = "Séance structurée selon ton score de Readiness. Reste concentré sur la précision et l'intensité juste."
+            coach_notes = "SÃ©ance structurÃ©e selon ton score de Readiness. Reste concentrÃ© sur la prÃ©cision et l'intensitÃ© juste."
 
-            # Bloc 1 : Mobilité (2 exs)
-            b1 = [ex for ex in valid_exercises if ex.family == "Mobilité"][:2]
+            # Bloc 1 : MobilitÃ© (2 exs)
+            b1 = [ex for ex in valid_exercises if ex.family == "MobilitÃ©"][:2]
             if len(b1) < 2:
                 b1 = valid_exercises[:2]
 
             block1 = WorkoutBlock(
                 block_number=1,
-                title="BLOC 1 : ÉCHAUFFEMENT & MOBILITÉ DYNAMIQUE",
+                title="BLOC 1 : Ã‰CHAUFFEMENT & MOBILITÃ‰ DYNAMIQUE",
                 focus="Activation articulaire et respiration",
                 target_rpe_range="RPE 4-5",
                 exercises=[
@@ -268,7 +268,7 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
                 ]
             )
 
-            # Bloc 2 : Corps de séance (3 exs)
+            # Bloc 2 : Corps de sÃ©ance (3 exs)
             b1_names = {e.name for e in b1}
             b2 = [ex for ex in valid_exercises if ex.family in ["Force", "Full Body", "Cardio", "Boxe"] and ex.name not in b1_names][:3]
             if len(b2) < 3:
@@ -276,8 +276,8 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
 
             block2 = WorkoutBlock(
                 block_number=2,
-                title="BLOC 2 : CORPS DE SÉANCE & CONDITIONING",
-                focus="Puissance, force et explosivité",
+                title="BLOC 2 : CORPS DE SÃ‰ANCE & CONDITIONING",
+                focus="Puissance, force et explosivitÃ©",
                 target_rpe_range="RPE 7 Max" if readiness.status == ReadinessStatus.ORANGE else "RPE 8-9",
                 exercises=[
                     WorkoutExercise(
@@ -302,7 +302,7 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
             block3 = WorkoutBlock(
                 block_number=3,
                 title="BLOC 3 : RENFORCEMENT, CORE & POSTURE",
-                focus="Stabilité et solidité du tronc",
+                focus="StabilitÃ© et soliditÃ© du tronc",
                 target_rpe_range="RPE 6-7",
                 exercises=[
                     WorkoutExercise(
@@ -310,9 +310,9 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
                         sets=3,
                         reps_or_duration="45 s ou 12 reps",
                         target_rpe=7,
-                        tempo="Contrôlé",
+                        tempo="ContrÃ´lÃ©",
                         rest_seconds=60,
-                        notes=ex.instructions or "Gainage verrouillé."
+                        notes=ex.instructions or "Gainage verrouillÃ©."
                     )
                     for ex in b3
                 ]
@@ -339,45 +339,46 @@ Génère la séance en 3 blocs obligatoires (Bloc 1: 2 exercices, Bloc 2: 3 exer
     @classmethod
     def format_telegram_message(cls, plan: WorkoutPlan, athlete_name: str = "Guerrier") -> str:
         """
-        Formate le plan d'entraînement en 3 Blocs avec les vrais liens vidéos YouTube Shorts.
+        Formate le plan d'entraÃ®nement en 3 Blocs avec les vrais liens vidÃ©os YouTube Shorts.
         """
-        status_emoji = "🟢" if plan.readiness_status == ReadinessStatus.GREEN else ("🟡" if plan.readiness_status == ReadinessStatus.ORANGE else "🔴")
+        status_emoji = "ðŸŸ¢" if plan.readiness_status == ReadinessStatus.GREEN else ("ðŸŸ¡" if plan.readiness_status == ReadinessStatus.ORANGE else "ðŸ”´")
         status_label = plan.readiness_status.value
 
         msg = []
-        msg.append("🥋 **COACHING AMAZONIAN SAMOURAI**")
-        msg.append(f"Athlète : **{athlete_name}** | Statut : {status_emoji} **{status_label}** (Score R : `{plan.readiness_score}/5.0`)\n")
-        msg.append(f"📋 **{plan.title}**")
-        msg.append(f"🎯 **Focus :** {plan.focus}")
-        msg.append(f"⏱️ **Durée totale estimée :** ~{plan.total_estimated_minutes} min\n")
+        msg.append("ðŸ¥‹ **COACHING AMAZONIAN SAMOURAI**")
+        msg.append(f"AthlÃ¨te : **{athlete_name}** | Statut : {status_emoji} **{status_label}** (Score R : `{plan.readiness_score}/5.0`)\n")
+        msg.append(f"ðŸ“‹ **{plan.title}**")
+        msg.append(f"ðŸŽ¯ **Focus :** {plan.focus}")
+        msg.append(f"â±ï¸ **DurÃ©e totale estimÃ©e :** ~{plan.total_estimated_minutes} min\n")
 
-        msg.append(f"💬 **Le Mot du Coach (Jason Ponet) :**\n_{plan.coach_notes}_\n")
+        msg.append(f"ðŸ’¬ **Le Mot du Coach (Jason Ponet) :**\n_{plan.coach_notes}_\n")
 
         if plan.adjustment and plan.adjustment.safety_reasons:
-            msg.append("🛡️ **Ajustements de Sécurité :**")
+            msg.append("ðŸ›¡ï¸ **Ajustements de SÃ©curitÃ© :**")
             for reason in plan.adjustment.safety_reasons:
-                msg.append(f" • {reason}")
+                msg.append(f" â€¢ {reason}")
             msg.append("")
 
         for block in plan.blocks:
-            msg.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            msg.append(f"🔥 **{block.title}** ({len(block.exercises)} exercices)")
-            msg.append(f"📌 _{block.focus}_ | Intensité cible : `{block.target_rpe_range}`\n")
+            msg.append("â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
+            msg.append(f"ðŸ”¥ **{block.title}** ({len(block.exercises)} exercices)")
+            msg.append(f"ðŸ“Œ _{block.focus}_ | IntensitÃ© cible : `{block.target_rpe_range}`\n")
 
             for idx, item in enumerate(block.exercises, 1):
                 ex = item.exercise
                 video_url = ex.video_url or cls._get_clean_video_url(ex, ex.name)
-                video_link_md = f"[🎬 Voir la démonstration]({video_url})"
+                video_link_md = f"[ðŸŽ¬ Voir la dÃ©monstration]({video_url})"
 
                 msg.append(f"**{block.block_number}.{idx} - {ex.name}**")
-                msg.append(f"   📊 **Volume :** {item.sets} séries × {item.reps_or_duration}")
-                msg.append(f"   ⚡ **Intensité :** RPE {item.target_rpe}/10 | Tempo : {item.tempo} | Repos : {item.rest_seconds}s")
+                msg.append(f"   ðŸ“Š **Volume :** {item.sets} sÃ©ries Ã— {item.reps_or_duration}")
+                msg.append(f"   âš¡ **IntensitÃ© :** RPE {item.target_rpe}/10 | Tempo : {item.tempo} | Repos : {item.rest_seconds}s")
                 if item.notes:
-                    msg.append(f"   💡 **Consigne :** _{item.notes}_")
-                msg.append(f"   🔗 {video_link_md}\n")
+                    msg.append(f"   ðŸ’¡ **Consigne :** _{item.notes}_")
+                msg.append(f"   ðŸ”— {video_link_md}\n")
 
-        msg.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        msg.append("👊 *Après la séance, envoie ton débriefing vocal ou texte (RPE ressenti, sensations).*")
-        msg.append("🔥 **Libertad & Performance.**")
+        msg.append("â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”")
+        msg.append("ðŸ‘Š *AprÃ¨s la sÃ©ance, envoie ton dÃ©briefing vocal ou texte (RPE ressenti, sensations).*")
+        msg.append("ðŸ”¥ **Libertad & Performance.**")
 
         return "\n".join(msg)
+

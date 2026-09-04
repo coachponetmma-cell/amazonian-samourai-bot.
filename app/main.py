@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,16 +16,16 @@ logger = logging.getLogger("coaching_ia_v2")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Démarrage
-    logger.info("🚀 Démarrage du serveur Coaching IA V2...")
+    # DÃ©marrage
+    logger.info("ðŸš€ DÃ©marrage du serveur Coaching IA V2...")
     client = get_supabase_client()
     if client:
-        logger.info("✅ Connexion Supabase active.")
+        logger.info("âœ… Connexion Supabase active.")
     else:
-        logger.warning("⚠️ Mode local/fallback actif (Supabase non configuré).")
+        logger.warning("âš ï¸ Mode local/fallback actif (Supabase non configurÃ©).")
     yield
-    # Arrêt
-    logger.info("🛑 Arrêt du serveur Coaching IA V2...")
+    # ArrÃªt
+    logger.info("ðŸ›‘ ArrÃªt du serveur Coaching IA V2...")
 
 
 app = FastAPI(
@@ -60,3 +60,4 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)
+

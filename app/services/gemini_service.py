@@ -208,7 +208,7 @@ class GeminiService:
         prompt = f"Tu es le coach IA principal Amazonian Samourai. Rédige une synthèse de coaching claire, motivante et dynamique pour {first_name}. Objectif: {goal}. Logs des 7 derniers entraînements: {logs}"
         
         # Liste des modèles valides affichés sur ton AI Studio par ordre de priorité
-        models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-1.5-flash']
+        models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.6-flash-lite', 'gemini-1.5-flash']
         
         import google.generativeai as genai
         for m_name in models_to_try:
@@ -221,3 +221,4 @@ class GeminiService:
                 continue
 
         return f"🥊 Bilan pour {first_name}: {len(logs)} séance(s) analysée(s)."
+

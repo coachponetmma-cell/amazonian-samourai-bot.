@@ -1,4 +1,4 @@
-from .schemas import (
+﻿from .schemas import (
     ReadinessStatus,
     DailyCheckinInput,
     ReadinessResult,
@@ -19,3 +19,4 @@ __all__ = [
     "WorkoutPlan",
     "WorkoutAdjustment"
 ]
+

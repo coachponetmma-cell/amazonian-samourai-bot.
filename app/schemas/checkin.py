@@ -17,3 +17,4 @@ class GeminiCheckinAnalysis(BaseModel):
     missing_fields: List[str] = Field(default_factory=list)
     feedback_coach: str = Field(..., description="Message court et motivant du coach")
 
+
