@@ -11,9 +11,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 1. Analyse du check-in par Gemini
     analysis = analyze_checkin_with_gemini(user_text)
     
-    # 2. Récupération du profil de l'athlète dans Supabase
-    athlete_response = supabase.table("athlete_profiles").select("*").eq("telegram_id", telegram_id).execute()
-    athlete_profile = athlete_response.data[0] if athlete_response.data else {}
+    # 2. Récupération sécurisée du profil de l'athlète dans Supabase
+    athlete_profile = {}
+    try:
+        # Recherche par user_id ou fallback
+        athlete_response = supabase.table("athlete_profiles").select("*").eq("user_id", telegram_id).execute()
+        if athlete_response.data:
+            athlete_profile = athlete_response.data[0]
+    except Exception:
+        pass
     
     # 3. Récupération des exercices éligibles dans Supabase
     equipment = analysis.equipment_available or athlete_profile.get("default_equipment", "Poids du corps")
