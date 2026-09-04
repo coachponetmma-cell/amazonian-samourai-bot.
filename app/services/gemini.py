@@ -34,11 +34,11 @@ def _call_gemini_with_retry(prompt: str, schema=None):
 
 def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
     prompt = f"""
-    Tu es le coach principal IA du Samourai Performance System.
-    Analyse le message de check-in de l'athlète ci-dessous :
-    - Extrais les notes sur une échelle de 1 à 10 si mentionnées.
-    - Repère si l'athlète mentionne un équipement spécifique ou une contrainte de matériel/lieu (ex: hôtel, déplacement, kettlebell, élastique).
-    - Génère un retour court, incisif et motivant adapté à un combattant MMA.
+    Tu es le coach principal du Samourai Performance System.
+    Analyse le message de check-in de l'athlète :
+    - Extrais les notes (sommeil, énergie, fatigue) si mentionnées.
+    - Repère le matériel disponible ou le contexte (hôtel, déplacement, KB, élastiques...).
+    - Génère un retour humain, incisif et motivant adapté à un combattant MMA.
 
     Message de l'athlète : "{raw_text}"
     """
@@ -50,26 +50,33 @@ def generate_daily_workout(analysis, exercises_list: list, athlete_profile: dict
     Tu es le Head Coach du Samourai Performance System.
     Génère la séance de prépa physique / MMA personnalisée pour l'athlète.
 
-    REGLES STRICTES DE SELECTION DES EXERCICES :
-    1. Utilise EN PRIORITÉ les exercices de la liste JSON Supabase suivante :
+    INTERDICTIONS STRICTES DE FORMATAGE :
+    - N'utilise JAMAIS les caractères '#', '##', '###' ni '**' pour le texte.
+    - N'utilise QUE du HTML valide pour Telegram : <b>texte gras</b>, <i>texte italique</i>, et <a href="URL">Texte du lien</a>.
+
+    GESTION DES EXERCICES ET DES LIENS VIDÉO :
+    1. Utilise en priorité la liste d'exercices JSON Supabase suivante :
     {exercises_list}
-       Pour chaque exercice issu de cette liste, INCLUS le lien vidéo s'il existe dans le champ 'video_url' ou 'url' sous la forme : [Nom](URL).
+    
+    2. Pour CHAQUE exercice de la liste Supabase intégré à la séance, inclus obligatoirement son lien vidéo cliquable sous la forme :
+       <a href="URL_PRESENTE_DANS_JSON">Nom de l'exercice</a>
+       (Exemple : <a href="https://youtube.com/watch?v=xyz">Sprawls</a>)
 
-    2. REGLE DE FALLBACK (SI MATÉRIEL MANQUANT DANS LA BASE) :
-       Si l'athlète dispose d'un matériel (ex: Kettlebell, Élastique, Haltères) qui n'est PAS représenté dans la liste Supabase fournie, TU ES AUTORISÉ à créer des exercices adaptés avec ce matériel.
-       IMPORTANT : Pour ces exercices de fallback créés par toi-même, NE METS AUCUN LIEN VIDÉO (indique simplement le nom et les consignes).
+    3. RÈGLE DE FALLBACK (MATÉRIEL PAS DANS LA BDD) :
+       Si l'athlète mentionne du matériel absent de la BDD, crée l'exercice adapté mais N'INCLUS AUCUN LIEN (écris simplement le nom en gras : <b>Nom de l'exercice</b>).
 
-    3. ADAPTATION DU VOLUME :
-       - Énergie : {analysis.energy_score}/10
-       - Fatigue : {analysis.fatigue_score}/10
-       - Matériel / Environnement : {analysis.equipment_available or athlete_profile.get('default_equipment', 'Poids du corps')}
-       - Objectif : {athlete_profile.get('goal', 'MMA / Combat')}
+    STRUCTURE SOUHAITÉE :
+    <b>🥋 BLOC ÉCHAUFFEMENT & MOBILITÉ</b>
+    • Détail des exercices avec leurs liens HTML...
 
-    STRUCTURE DE LA RÉPONSE :
-    - 🥋 **Bloc Échauffement & Mobilité**
-    - 💥 **Bloc Principal (Force / Explosivité)**
-    - 🥊 **Finisseur Conditionnement MMA**
-    - 📊 **Consignes d'intensité (RPE visé)**
+    <b>💥 BLOC PRINCIPAL (FORCE / EXPLOSIVITÉ)</b>
+    • Détail des exercices avec leurs liens HTML...
+
+    <b>🥊 FINISSEUR CONDITIONNEMENT MMA</b>
+    • Détail du circuit...
+
+    <b>📊 CONSIGNES D'INTENSITÉ</b>
+    • RPE et consignes...
     """
     response = _call_gemini_with_retry(prompt)
     return response.text

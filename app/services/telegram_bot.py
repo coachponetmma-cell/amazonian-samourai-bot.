@@ -1,5 +1,4 @@
-﻿import html
-from telegram import Update
+﻿from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from app.core.config import settings
 from app.services.gemini import analyze_checkin_with_gemini, generate_daily_workout
@@ -25,25 +24,13 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     equipment = analysis.equipment_available or athlete_profile.get("default_equipment", "Poids du corps")
     exercises = get_available_exercises(equipment)
     
-    # Fallback si la table exercises est vide
-    if not exercises:
-        exercises = [
-            {"name": "Pompes MMA", "category": "Haut du corps", "equipment": "Bodyweight"},
-            {"name": "Squats explosifs", "category": "Bas du corps", "equipment": "Bodyweight"},
-            {"name": "Burpees Combat", "category": "Cardio", "equipment": "Bodyweight"},
-            {"name": "Sprawls", "category": "Conditionnement", "equipment": "Bodyweight"}
-        ]
-    
-    # 4. Génération de la séance
+    # 4. Génération de la séance au format HTML
     workout_plan = generate_daily_workout(analysis, exercises, athlete_profile)
     
-    # 5. Construction de la réponse formatée
-    feedback_clean = html.escape(analysis.feedback_coach)
-    workout_clean = html.escape(workout_plan)
+    # 5. Envoi du message formaté proprement
+    response_message = f"<b>{analysis.feedback_coach}</b>\n\n-------------------------\n\n📋 <b>TA SÉANCE DU JOUR</b>\n\n{workout_plan}"
     
-    response_message = f"<b>{feedback_clean}</b>\n\n-------------------------\n\n📋 <b>TA SÉANCE DU JOUR</b>\n\n{workout_clean}"
-    
-    await update.message.reply_text(response_message, parse_mode="HTML")
+    await update.message.reply_text(response_message, parse_mode="HTML", disable_web_page_preview=True)
 
 def create_telegram_application():
     application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).build()
