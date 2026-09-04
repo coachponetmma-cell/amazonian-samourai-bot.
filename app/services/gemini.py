@@ -29,3 +29,33 @@ def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
     return response.parsed
 
 
+
+def generate_daily_workout(analysis, exercises_list: list, athlete_profile: dict) -> str:
+    prompt = f"""
+    Tu es le Head Coach du Samourai Performance System.
+    Génère la séance de prépa physique / MMA personnalisée pour l'athlète.
+
+    CONTRAINTES STRICTES :
+    1. Tu dois MENTIONNER ET UTILISER UNIQUEMENT les exercices présents dans la liste suivante issue de notre base de données Supabase :
+    {exercises_list}
+
+    2. Ne crée AUCUN exercice qui n'est pas dans cette liste.
+    3. Adapte le volume et l'intensité selon les données du check-in :
+       - Énergie : {analysis.energy_score}/10
+       - Fatigue : {analysis.fatigue_score}/10
+       - Matériel pour la séance : {analysis.equipment_available or athlete_profile.get('default_equipment', 'Poids du corps')}
+       - Objectif athlète : {athlete_profile.get('goal', 'MMA / Combat')}
+
+    STRUCTURE DE LA RÉPONSE :
+    - 🥋 **Bloc Échauffement & Mobilité**
+    - 💥 **Bloc Principal (Force / Explosivité)**
+    - 🥊 **Finisseur Conditionnement MMA**
+    - 📊 **Consignes d'intensité (RPE visé)**
+    """
+
+    response = client.models.generate_content(
+        model='gemini-3.6-flash',
+        contents=prompt
+    )
+    
+    return response.text
