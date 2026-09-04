@@ -34,11 +34,11 @@ def _call_gemini_with_retry(prompt: str, schema=None):
 
 def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
     prompt = f"""
-    Tu es le coach principal du Samourai Performance System.
+    Tu es le Head Coach du Samourai Performance System.
     Analyse le message de check-in de l'athlète :
     - Extrais les notes (sommeil, énergie, fatigue) si mentionnées.
-    - Repère le matériel disponible ou le contexte (hôtel, déplacement, KB, élastiques...).
-    - Génère un retour humain, incisif et motivant adapté à un combattant MMA.
+    - Repère la liste EXACTE du matériel disponible ou les contraintes de lieu (ex: chambre d'hôtel sans matériel, 2 KB, élastique, salle complète...).
+    - Génère un retour coach incisif, motivant et direct.
 
     Message de l'athlète : "{raw_text}"
     """
@@ -48,35 +48,59 @@ def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
 def generate_daily_workout(analysis, exercises_list: list, athlete_profile: dict) -> str:
     prompt = f"""
     Tu es le Head Coach du Samourai Performance System.
-    Génère la séance de prépa physique / MMA personnalisée pour l'athlète.
+    Génère la fiche de séance de prépa physique / MMA au format HTML structuré de haute précision.
 
-    INTERDICTIONS STRICTES DE FORMATAGE :
-    - N'utilise JAMAIS les caractères '#', '##', '###' ni '**' pour le texte.
-    - N'utilise QUE du HTML valide pour Telegram : <b>texte gras</b>, <i>texte italique</i>, et <a href="URL">Texte du lien</a>.
+    RÈGLES D'ADAPTATION AU MATÉRIEL ET LIEU (STRICTES) :
+    1. Analyse impérativement l'environnement de l'athlète ({analysis.equipment_available or 'Poids du corps'}).
+    2. SI L'ATHLÈTE EST EN CHÂMBRE D'HÔTEL / SANS MATÉRIEL : Propose UNIQUEMENT des exercices au poids du corps. INTERDICTION TOTALE d'inclure des exercices nécessitant une barre, des tractions, du landmine, ou des machines s'il n'y a pas accès.
 
-    GESTION DES EXERCICES ET DES LIENS VIDÉO :
-    1. Utilise en priorité la liste d'exercices JSON Supabase suivante :
-    {exercises_list}
+    RÈGLES DES LIENS ET FORMATAGE HTML :
+    1. N'utilise JAMAIS de caractères Markdown comme '#', '##', '###' ou '**'.
+    2. Utilise uniquement du HTML valide : <b>Gras</b>, <i>Italique</i>, et <a href="URL">Lien</a>.
+    3. Pour chaque exercice issu de la liste JSON Supabase suivante :
+       {exercises_list}
+       Affiche sous l'exercice la ligne : 🔗 <a href="URL_DU_LIEN">🎬 Voir la démonstration</a>.
+    4. RÈGLE DE FALLBACK (Exercice créé par l'IA si matériel non présent en BDD) : Si l'exercice est créé en fallback, affiche simplement le nom en <b>Gras</b> sans mettre de ligne de démonstration vidéo.
+
+    STRUCTURE EXIGÉE (Respecte exactement ce design) :
+
+    <b>🥋 COACHING AMAZONIAN SAMOURAI</b>
+    <b>Athlète :</b> {athlete_profile.get('first_name', 'Combattant')} | <b>Statut :</b> {analysis.energy_score}/10 Énergie
+
+    <b>📋 CONDITIONING COMBAT & ADAPTATION</b>
+    🎯 <b>Focus :</b> Transfert MMA & Explosivité
+    ⏱️ <b>Durée estimée :</b> ~40 min
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🔥 <b>BLOC 1 : ÉCHAUFFEMENT & MOBILITÉ DYNAMIQUE</b>
     
-    2. Pour CHAQUE exercice de la liste Supabase intégré à la séance, inclus obligatoirement son lien vidéo cliquable sous la forme :
-       <a href="URL_PRESENTE_DANS_JSON">Nom de l'exercice</a>
-       (Exemple : <a href="https://youtube.com/watch?v=xyz">Sprawls</a>)
+    1.1 - <b>Nom de l'exercice 1</b>
+       📊 Volume : X séries × Y reps
+       ⚡️ Intensité : RPE X/10 | Tempo : Fluide | Repos : Xs
+       💡 Consigne : Detail de la consigne...
+       🔗 <a href="URL">🎬 Voir la démonstration</a>
 
-    3. RÈGLE DE FALLBACK (MATÉRIEL PAS DANS LA BDD) :
-       Si l'athlète mentionne du matériel absent de la BDD, crée l'exercice adapté mais N'INCLUS AUCUN LIEN (écris simplement le nom en gras : <b>Nom de l'exercice</b>).
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🔥 <b>BLOC 2 : CORPS DE SÉANCE & CONDITIONING</b>
 
-    STRUCTURE SOUHAITÉE :
-    <b>🥋 BLOC ÉCHAUFFEMENT & MOBILITÉ</b>
-    • Détail des exercices avec leurs liens HTML...
+    2.1 - <b>Nom de l'exercice 2</b>
+       📊 Volume : X séries × Y reps
+       ⚡️ Intensité : RPE X/10 | Repos : Xs
+       💡 Consigne : Detail de la consigne...
+       🔗 <a href="URL">🎬 Voir la démonstration</a>
 
-    <b>💥 BLOC PRINCIPAL (FORCE / EXPLOSIVITÉ)</b>
-    • Détail des exercices avec leurs liens HTML...
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    🔥 <b>BLOC 3 : FINISSEUR CONDITIONNEMENT MMA</b>
 
-    <b>🥊 FINISSEUR CONDITIONNEMENT MMA</b>
-    • Détail du circuit...
+    3.1 - <b>Format Circuit / AMRAP / Intervallaire</b>
+       📊 Consignes précises du finisseur...
 
-    <b>📊 CONSIGNES D'INTENSITÉ</b>
-    • RPE et consignes...
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    📊 <b>CONSIGNES D'INTENSITÉ (RPE VISÉ)</b>
+    • Consigne globale du coach...
+
+    👊 Après la séance, envoie ton débriefing vocal ou texte !
+    🔥 Libertad & Performance.
     """
     response = _call_gemini_with_retry(prompt)
     return response.text
