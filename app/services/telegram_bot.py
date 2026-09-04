@@ -1,5 +1,6 @@
 ﻿from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from app.core.config import settings
 from app.services.gemini import analyze_checkin_with_gemini, generate_daily_workout
 from app.services.supabase_service import get_available_exercises, supabase
 
@@ -24,3 +25,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 5. Envoi du retour coach + la séance complète
     response_message = f"{analysis.feedback_coach}\n\n---\n\n📋 **TA SÉANCE DU JOUR**\n\n{workout_plan}"
     await update.message.reply_text(response_message, parse_mode="Markdown")
+
+def create_telegram_application():
+    application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).build()
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_message))
+    return application
