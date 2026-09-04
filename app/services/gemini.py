@@ -37,7 +37,7 @@ def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
     Tu es le coach principal IA du Samourai Performance System.
     Analyse le message de check-in de l'athlète ci-dessous :
     - Extrais les notes sur une échelle de 1 à 10 si mentionnées.
-    - Repère si l'athlète mentionne un équipement spécifique ou une contrainte de matériel/lieu (ex: hôtel, déplacement, chez lui).
+    - Repère si l'athlète mentionne un équipement spécifique ou une contrainte de matériel/lieu (ex: hôtel, déplacement, kettlebell, élastique).
     - Génère un retour court, incisif et motivant adapté à un combattant MMA.
 
     Message de l'athlète : "{raw_text}"
@@ -50,18 +50,19 @@ def generate_daily_workout(analysis, exercises_list: list, athlete_profile: dict
     Tu es le Head Coach du Samourai Performance System.
     Génère la séance de prépa physique / MMA personnalisée pour l'athlète.
 
-    CONTRAINTES STRICTES ET OBLIGATOIRES :
-    1. Tu dois MENTIONNER ET UTILISER UNIQUEMENT les exercices présents dans la liste JSON ci-dessous issue de notre base de données Supabase :
+    REGLES STRICTES DE SELECTION DES EXERCICES :
+    1. Utilise EN PRIORITÉ les exercices de la liste JSON Supabase suivante :
     {exercises_list}
+       Pour chaque exercice issu de cette liste, INCLUS le lien vidéo s'il existe dans le champ 'video_url' ou 'url' sous la forme : [Nom](URL).
 
-    2. Pour CHAQUE exercice cité dans la séance, tu DOIS obligatoirement inclure le nom de l'exercice ET son lien vidéo YouTube présent dans le champ 'video_url' ou 'url' sous la forme : 
-       [Nom de l'exercice](URL_Video) ou Lien démonstration : URL_Video.
-       Si une URL est absente dans le JSON, indique simplement le nom de l'exercice.
+    2. REGLE DE FALLBACK (SI MATÉRIEL MANQUANT DANS LA BASE) :
+       Si l'athlète dispose d'un matériel (ex: Kettlebell, Élastique, Haltères) qui n'est PAS représenté dans la liste Supabase fournie, TU ES AUTORISÉ à créer des exercices adaptés avec ce matériel.
+       IMPORTANT : Pour ces exercices de fallback créés par toi-même, NE METS AUCUN LIEN VIDÉO (indique simplement le nom et les consignes).
 
-    3. Adapte le volume, les séries et l'intensité selon le check-in :
+    3. ADAPTATION DU VOLUME :
        - Énergie : {analysis.energy_score}/10
        - Fatigue : {analysis.fatigue_score}/10
-       - Matériel / Environnement détecté : {analysis.equipment_available or athlete_profile.get('default_equipment', 'Poids du corps')}
+       - Matériel / Environnement : {analysis.equipment_available or athlete_profile.get('default_equipment', 'Poids du corps')}
        - Objectif : {athlete_profile.get('goal', 'MMA / Combat')}
 
     STRUCTURE DE LA RÉPONSE :
