@@ -271,7 +271,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         status=athlete.get("status", "free") if athlete else "free",
     )
 
-    checkin = DailyCheckinInput(raw_text=text, rpe=_extract_rpe(text))
+    from app.services.gemini import analyze_checkin_with_gemini
+    analysis = analyze_checkin_with_gemini(text)
+    await update.message.reply_text(analysis.feedback_coach)
     result = gemini.analyze_daily_checkin(profile, checkin)
 
     keyboard = InlineKeyboardMarkup(
@@ -306,6 +308,7 @@ def create_telegram_application() -> Application:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     return application
+
 
 
 
