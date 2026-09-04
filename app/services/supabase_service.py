@@ -5,13 +5,12 @@ supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 def get_available_exercises(equipment_needed: str = None):
     """
-    Récupère les exercices disponibles dans Supabase.
-    Si du matériel est précisé ou si l'athlète est en poids du corps, filtre en conséquence.
+    Récupère les exercices dans Supabase sans planter sur des noms de colonnes.
     """
-    query = supabase.table("exercises").select("name, category, equipment, description")
-    
-    if equipment_needed and ("poids du corps" in equipment_needed.lower() or "bodyweight" in equipment_needed.lower()):
-        query = query.ilike("equipment", "%bodyweight%")
-    
-    response = query.execute()
-    return response.data
+    try:
+        query = supabase.table("exercises").select("*")
+        response = query.execute()
+        return response.data if response.data else []
+    except Exception as e:
+        print(f"Erreur Supabase Exercises: {e}")
+        return []
