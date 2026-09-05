@@ -262,3 +262,77 @@ def generate_weekly_coach_summary(logs: List[Dict[str, Any]], athlete_info: Dict
     response = _call_gemini_with_retry(prompt)
     raw_output = response.text if response else ""
     return clean_telegram_html(raw_output)
+
+
+def transcribe_audio_with_gemini(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """
+    Transcrit fidèlement un message audio Telegram (.ogg) en texte via Gemini.
+    """
+    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
+    prompt = (
+        "Transcris fidèlement et mot à mot ce message audio envoyé par un athlète MMA à son coach. "
+        "Ne résume pas, n'invente rien, retranscris simplement tout ce qui est dit en français."
+    )
+    for model in models_to_try:
+        try:
+            content_parts = [
+                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                prompt
+            ]
+            response = client.models.generate_content(
+                model=model,
+                contents=content_parts
+            )
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            logger.warning(f"Erreur transcription audio sur {model}: {e}")
+            continue
+    return ""
+
+
+def parse_debrief_with_gemini(raw_text: str) -> Dict[str, Any]:
+    """
+    Analyse un message de débriefing de fin de séance (texte ou vocal transcrit)
+    pour extraire le RPE réel et formuler un retour guerrier du coach.
+    """
+    prompt = f"""
+    Tu es Jason Ponet (Amazonian Samourai), Head Coach MMA.
+    L'athlète vient d'envoyer son feedback de fin de séance :
+    "{raw_text}"
+
+    TÂCHES :
+    1. Détermine le RPE réel ressenti (entier de 1 à 10). Si non mentionné explicitement, déduis-le des sensations (par défaut 7).
+    2. Rédige un retour motivant et direct du coach Jason Ponet (court, martial, axé récupération : 'Libertad & Performance').
+
+    Réponds EXCLUSIVEMENT sous la forme d'un objet JSON avec cette structure :
+    {{
+        "rpe_real": 8,
+        "coach_reply": "Message d'encouragement du coach..."
+    }}
+    """
+    try:
+        import json
+        config = types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json")
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+            config=config
+        )
+        if response and response.text:
+            data = json.loads(response.text)
+            return {
+                "rpe_real": int(data.get("rpe_real", 7)),
+                "coach_reply": str(data.get("coach_reply", "Séance validée guerrier ! Récupère bien."))
+            }
+    except Exception as e:
+        logger.warning(f"Erreur analyse débriefing Gemini: {e}")
+
+    # Fallback regex
+    rpe_match = re.search(r"\b([1-9]|10)\b", raw_text)
+    rpe_val = int(rpe_match.group(1)) if rpe_match else 7
+    return {
+        "rpe_real": rpe_val,
+        "coach_reply": f"Bien reçu guerrier ! Séance validée à RPE {rpe_val}/10. Hydrate-toi et focus sur la récupération ! 🔥 Libertad & Performance."
+    }
+

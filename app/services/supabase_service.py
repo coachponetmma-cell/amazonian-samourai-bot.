@@ -1,3 +1,4 @@
+import re
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
@@ -140,6 +141,120 @@ def get_available_exercises(equipment_needed: Optional[str] = None) -> List[Dict
 # GESTION ATHLÈTES, CHECK-INS & WORKOUT LOGS
 # ==============================================================================
 
+def _robust_insert(client_obj: Client, table_name: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Insère des données dans une table Supabase en éliminant automatiquement
+    les colonnes qui n'existent pas encore dans le cache de schéma PostgREST.
+    """
+    attempt_data = dict(data)
+    for _ in range(6):
+        try:
+            res = client_obj.table(table_name).insert(attempt_data).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            err_msg = str(e)
+            match = re.search(r"Could not find the '([^']+)' column", err_msg)
+            if match:
+                missing_col = match.group(1)
+                logger.debug(f"Colonne '{missing_col}' absente de {table_name}, relance sans cette colonne.")
+                attempt_data.pop(missing_col, None)
+            else:
+                logger.error(f"Erreur insertion dans {table_name}: {e}")
+                return None
+    return None
+
+
+def athlete_profile_exists(telegram_id: int | str) -> bool:
+    """
+    Vérifie si un athlète existe et possède un profil configuré dans athlete_profiles.
+    """
+    try:
+        t_id = int(telegram_id)
+        ath_resp = supabase.table("athletes").select("id").eq("telegram_id", t_id).execute()
+        if not ath_resp.data:
+            return False
+        athlete_id = ath_resp.data[0]["id"]
+        prof_resp = supabase.table("athlete_profiles").select("athlete_id").eq("athlete_id", athlete_id).execute()
+        return bool(prof_resp.data and len(prof_resp.data) > 0)
+    except Exception as e:
+        logger.warning(f"Erreur athlete_profile_exists ({telegram_id}): {e}")
+        return False
+
+
+def save_new_athlete_profile(
+    telegram_id: int | str,
+    athlete_name: str,
+    goal: str,
+    default_equipment: str,
+    injuries: str,
+    username: Optional[str] = None,
+    raw_user_first_name: Optional[str] = None,
+    raw_user_last_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Enregistre ou met à jour le profil d'un nouvel athlète suite au tunnel d'onboarding.
+    """
+    t_id = int(telegram_id)
+    clean_name = athlete_name.strip()
+    parts = clean_name.split(maxsplit=1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else (raw_user_last_name or "")
+
+    ath_id = None
+    try:
+        ath_check = supabase.table("athletes").select("id").eq("telegram_id", t_id).execute()
+        if ath_check.data:
+            ath_id = ath_check.data[0]["id"]
+            supabase.table("athletes").update({
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username or "",
+                "status": "active"
+            }).eq("id", ath_id).execute()
+        else:
+            ath_insert = {
+                "code_id": f"TG-{t_id}",
+                "telegram_id": t_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "username": username or "",
+                "status": "active"
+            }
+            res = supabase.table("athletes").insert(ath_insert).execute()
+            if res.data:
+                ath_id = res.data[0]["id"]
+    except Exception as e:
+        logger.error(f"Erreur table athletes lors de l'onboarding ({t_id}): {e}")
+
+    if not ath_id:
+        ath_id = f"local-{t_id}"
+
+    prof_data = {
+        "athlete_id": ath_id,
+        "goal": goal,
+        "default_equipment": default_equipment,
+        "injuries_history": injuries,
+        "language": "fr"
+    }
+    try:
+        supabase.table("athlete_profiles").upsert(prof_data, on_conflict="athlete_id").execute()
+    except Exception as e:
+        logger.error(f"Erreur upsert athlete_profiles ({ath_id}): {e}")
+
+    return {
+        "id": ath_id,
+        "athlete_id": ath_id,
+        "telegram_id": t_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "username": username,
+        "goal": goal,
+        "default_equipment": default_equipment,
+        "injuries_history": injuries,
+        "status": "active"
+    }
+
+
 def get_athlete_by_telegram_id(telegram_id: int | str) -> Dict[str, Any]:
     """
     Récupère les données de l'athlète et son profil lié via son telegram_id.
@@ -244,46 +359,61 @@ def log_workout_generation(athlete_id: str, prescribed_rpe: int = 7, summary_tex
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "log_type": "workout_generated"
         }
-        res = supabase.table("workout_logs").insert(payload).execute()
-        return res.data[0] if res.data else None
+        return _robust_insert(supabase, "workout_logs", payload)
     except Exception as e:
         logger.error(f"Erreur insertion workout_logs (generated): {e}")
         return None
 
 
-def log_workout_completion(athlete_id: str, rpe_score: int, feedback_text: str, checkin_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def log_workout_completion(
+    athlete_id: Optional[str] = None,
+    telegram_id: Optional[int | str] = None,
+    rpe_score: Optional[int] = None,
+    rpe_real: Optional[int] = None,
+    feedback_text: str = "",
+    completed: bool = True,
+    completed_at: Optional[str] = None,
+    checkin_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
-    Enregistre le débriefing / retour de fin de séance d'un athlète dans workout_logs et debriefs.
+    Enregistre le feedback / débriefing de fin de séance d'un athlète dans workout_logs et debriefs.
+    Renseigne telegram_id, completed=True, rpe_real, feedback_text, completed_at.
     """
-    if not athlete_id:
-        return None
-    try:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "athlete_id": athlete_id,
-            "checkin_id": checkin_id,
-            "rpe_score": rpe_score,
-            "feedback_text": feedback_text[:1000] if feedback_text else "Débriefing séance",
-            "completed_at": now_iso,
-            "log_type": "workout_completion"
-        }
-        res = supabase.table("workout_logs").insert(payload).execute()
+    t_id = int(telegram_id) if telegram_id and str(telegram_id).isdigit() else None
+    if not athlete_id and t_id:
+        ath = get_athlete_by_telegram_id(t_id)
+        athlete_id = ath.get("id")
 
-        # Enregistrement synchronisé dans debriefs si la table est active
+    final_rpe = rpe_real if rpe_real is not None else (rpe_score or 7)
+    now_iso = completed_at or datetime.now(timezone.utc).isoformat()
+
+    payload = {
+        "athlete_id": athlete_id,
+        "checkin_id": checkin_id,
+        "rpe_score": final_rpe,
+        "feedback_text": feedback_text[:1000] if feedback_text else "Séance validée",
+        "completed_at": now_iso,
+        "log_type": "workout_completion",
+        "telegram_id": t_id,
+        "completed": bool(completed),
+        "rpe_real": final_rpe
+    }
+
+    res = _robust_insert(supabase, "workout_logs", payload)
+
+    # Enregistrement synchronisé dans debriefs si la table est active
+    if athlete_id:
         try:
             supabase.table("debriefs").insert({
                 "athlete_id": athlete_id,
-                "rpe": rpe_score,
+                "rpe": final_rpe,
                 "feedback": feedback_text[:1000] if feedback_text else "Retour",
                 "created_at": now_iso
             }).execute()
         except Exception:
             pass
 
-        return res.data[0] if res.data else None
-    except Exception as e:
-        logger.error(f"Erreur insertion workout_logs (completion): {e}")
-        return None
+    return res
 
 
 def log_checkin(athlete_id: str, analysis: Any, raw_text: str) -> Optional[Dict[str, Any]]:
