@@ -3,7 +3,8 @@ import re
 from telegram import (
     Update,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    Bot
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -43,6 +44,17 @@ logger = logging.getLogger(__name__)
 # États pour le tunnel d'onboarding ConversationHandler
 ASK_NAME, ASK_GOAL, ASK_EQUIPMENT, ASK_INJURIES = range(4)
 
+_global_telegram_application = None
+
+
+def get_telegram_bot_instance() -> Optional[Bot]:
+    global _global_telegram_application
+    if _global_telegram_application and _global_telegram_application.bot:
+        return _global_telegram_application.bot
+    if settings.TELEGRAM_BOT_TOKEN:
+        return Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    return None
+
 
 def is_head_coach(user_id: int, username: str = None) -> bool:
     """
@@ -59,27 +71,44 @@ def is_head_coach(user_id: int, username: str = None) -> bool:
     return False
 
 
-async def send_safe_html_message(message, text: str, reply_markup: InlineKeyboardMarkup = None):
+async def send_safe_html_message(message_or_bot, text: str, reply_markup: InlineKeyboardMarkup = None, chat_id: int = None):
     """
     Envoie un message formaté en HTML sur Telegram de manière sécurisée.
-    En cas d'erreur de parsing Telegram, retente en texte nettoyé.
+    Accepte soit un objet message Telegram, soit une instance Bot avec chat_id.
     """
     cleaned = clean_telegram_html(text)
     try:
-        await message.reply_text(
-            cleaned,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=reply_markup
-        )
+        if hasattr(message_or_bot, "reply_text"):
+            await message_or_bot.reply_text(
+                cleaned,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
+        elif chat_id and hasattr(message_or_bot, "send_message"):
+            await message_or_bot.send_message(
+                chat_id=chat_id,
+                text=cleaned,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
     except Exception as e:
         logger.warning(f"Échec envoi Telegram HTML ({e}), fallback en texte brut")
         plain_text = re.sub(r"<[^>]+>", "", cleaned)
-        await message.reply_text(
-            plain_text,
-            disable_web_page_preview=True,
-            reply_markup=reply_markup
-        )
+        if hasattr(message_or_bot, "reply_text"):
+            await message_or_bot.reply_text(
+                plain_text,
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
+        elif chat_id and hasattr(message_or_bot, "send_message"):
+            await message_or_bot.send_message(
+                chat_id=chat_id,
+                text=plain_text,
+                disable_web_page_preview=True,
+                reply_markup=reply_markup
+            )
 
 
 # ==============================================================================
@@ -174,6 +203,7 @@ async def handle_onboarding_equipment(update: Update, context: ContextTypes.DEFA
 async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Étape 4/4 : Récupère les blessures, enregistre le profil dans Supabase et clôture l'onboarding.
+    Notifie également automatiquement le Head Coach.
     """
     injuries = update.message.text.strip()
     context.user_data["injuries"] = injuries
@@ -197,6 +227,23 @@ async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAU
         raw_user_first_name=raw_first,
         raw_user_last_name=raw_last
     )
+
+    # Notification automatique vers le COACH_TELEGRAM_ID
+    coach_id = getattr(settings, "COACH_TELEGRAM_ID", None)
+    if coach_id:
+        try:
+            coach_msg = (
+                "<b>🔔 NOUVEL ATHLÈTE INSCRIT SUR LE BOT</b>\n\n"
+                f"<b>Nom :</b> {name}\n"
+                f"<b>Telegram ID :</b> <code>{telegram_id}</code> (@{username or 'N/A'})\n"
+                f"<b>Objectif :</b> {goal}\n"
+                f"<b>Matériel par défaut :</b> {equipment}\n"
+                f"<b>Blessures / Contraintes :</b> {injuries}\n\n"
+                "🔥 <i>Prêt pour le combat.</i>"
+            )
+            await send_safe_html_message(context.bot, coach_msg, chat_id=int(coach_id))
+        except Exception as e:
+            logger.error(f"Erreur notification nouvel athlète au coach: {e}")
 
     final_text = (
         "✅ <b>PROFIL ATHLÈTE ENREGISTRÉ AVEC SUCCÈS !</b>\n\n"
@@ -249,7 +296,7 @@ async def handle_finish_workout_callback(update: Update, context: ContextTypes.D
 
 
 # ==============================================================================
-# 3. COMMANDE /HEBDO POUR LE HEAD COACH
+# 3. COMMANDE /HEBDO POUR LE HEAD COACH & SCHEDULER AUTOMATIQUE
 # ==============================================================================
 
 async def handle_hebdo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -315,6 +362,41 @@ async def handle_hebdo_command(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Erreur commande /hebdo: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Erreur lors de la génération du bilan hebdo : {e}")
+
+
+async def run_automatic_hebdo_summary(bot_instance: Bot):
+    """
+    Tâche automatique exécutée chaque dimanche à 08:00 par le scheduler.
+    Génère et envoie le bilan /hebdo pour chaque athlète actif au Head Coach.
+    """
+    coach_id = getattr(settings, "COACH_TELEGRAM_ID", None)
+    if not coach_id or not bot_instance:
+        logger.warning("Scheduler hebdo ignoré : COACH_TELEGRAM_ID ou bot manquant.")
+        return
+
+    logger.info("🤖 Exécution de la tâche automatique /hebdo du dimanche...")
+    try:
+        all_athletes = get_all_athletes()
+        if not all_athletes:
+            logger.info("Aucun athlète trouvé pour le bilan hebdo automatique.")
+            return
+
+        for athlete in all_athletes:
+            ath_id = athlete.get("id")
+            if not ath_id:
+                continue
+
+            target_athlete = get_athlete_by_id(ath_id)
+            logs = get_last_7_days_workout_logs(athlete_id=ath_id, days=7)
+            checkins = get_last_7_days_checkins(athlete_id=ath_id, days=7)
+
+            # Ne générer que s'il y a un minimum d'activité ou de profil
+            summary_html = generate_weekly_coach_summary(logs=logs, athlete_info=target_athlete, checkins=checkins)
+            await send_safe_html_message(bot_instance, summary_html, chat_id=int(coach_id))
+
+        logger.info("✅ Bilans hebdo automatiques envoyés au Head Coach avec succès.")
+    except Exception as e:
+        logger.error(f"Erreur lors de l'exécution automatique des bilans hebdo: {e}", exc_info=True)
 
 
 # ==============================================================================
@@ -459,6 +541,7 @@ def create_telegram_application():
     """
     Initialise l'application Telegram avec ses handlers et son ConversationHandler.
     """
+    global _global_telegram_application
     token = settings.TELEGRAM_BOT_TOKEN
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN manquant.")
@@ -492,4 +575,5 @@ def create_telegram_application():
     # 5. Messages Vocaux
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
 
+    _global_telegram_application = application
     return application
