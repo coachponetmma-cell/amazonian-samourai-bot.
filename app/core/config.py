@@ -1,4 +1,4 @@
-﻿import os
+import os
 from functools import lru_cache
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Supabase (PostgreSQL)
     SUPABASE_URL: str = "https://your-project.supabase.co"
     SUPABASE_KEY: str = "your-anon-or-service-role-key"
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
 
     # Google Gemini API
     GEMINI_API_KEY: Optional[str] = None
@@ -24,6 +25,8 @@ class Settings(BaseSettings):
     # Telegram Bot API
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
+    COACH_TELEGRAM_ID: Optional[int] = None
+    ADMIN_TELEGRAM_IDS: Optional[str] = None
 
     # Readiness Weights & Thresholds
     WEIGHT_SLEEP: float = 0.25

@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from typing import Optional
 from supabase import create_client, Client
 from app.core.config import settings
@@ -19,7 +19,7 @@ class SupabaseService:
             return cls._instance
 
         url = settings.SUPABASE_URL
-        key = settings.SUPABASE_KEY
+        key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
 
         if not url or "your-project.supabase.co" in url or not key or "your-anon" in key:
             logger.warning("Supabase credentials not configured. Running in mock/offline mode.")
