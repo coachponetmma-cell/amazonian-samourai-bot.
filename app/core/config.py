@@ -22,9 +22,12 @@ class Settings(BaseSettings):
     # Google Gemini API
     GEMINI_API_KEY: Optional[str] = None
 
-    # Telegram Bot API
+    # Telegram Bot & Webhook API
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None
+    WEBHOOK_SECRET: Optional[str] = None
+    RENDER_EXTERNAL_URL: Optional[str] = None
+    WEBHOOK_URL: Optional[str] = None
     COACH_TELEGRAM_ID: Optional[int] = None
     ADMIN_TELEGRAM_IDS: Optional[str] = None
 

@@ -166,19 +166,24 @@ def _robust_insert(client_obj: Client, table_name: str, data: Dict[str, Any]) ->
 
 def athlete_profile_exists(telegram_id: int | str) -> bool:
     """
-    Vérifie si un athlète existe et possède un profil configuré dans athlete_profiles.
+    Vérifie si un athlète possède un profil dans athlete_profiles via son telegram_id.
     """
     try:
         t_id = int(telegram_id)
-        ath_resp = supabase.table("athletes").select("id").eq("telegram_id", t_id).execute()
-        if not ath_resp.data:
-            return False
-        athlete_id = ath_resp.data[0]["id"]
-        prof_resp = supabase.table("athlete_profiles").select("athlete_id").eq("athlete_id", athlete_id).execute()
-        return bool(prof_resp.data and len(prof_resp.data) > 0)
+        # Requête directe prioritaire sur athlete_profiles
+        try:
+            resp = supabase.table("athlete_profiles").select("athlete_id").eq("telegram_id", t_id).execute()
+            if resp.data and len(resp.data) > 0:
+                return True
+        except Exception as col_err:
+            if "telegram_id" in str(col_err):
+                # Fallback de transition si la colonne telegram_id n'a pas encore été ajoutée dans Supabase
+                join_resp = supabase.table("athlete_profiles").select("athlete_id, athletes!inner(id)").eq("athletes.telegram_id", t_id).execute()
+                return bool(join_resp.data and len(join_resp.data) > 0)
+            raise col_err
     except Exception as e:
         logger.warning(f"Erreur athlete_profile_exists ({telegram_id}): {e}")
-        return False
+    return False
 
 
 def save_new_athlete_profile(
@@ -192,7 +197,7 @@ def save_new_athlete_profile(
     raw_user_last_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Enregistre ou met à jour le profil d'un nouvel athlète suite au tunnel d'onboarding.
+    Enregistre ou met à jour le profil d'un nouvel athlète dans athlete_profiles suite au tunnel d'onboarding.
     """
     t_id = int(telegram_id)
     clean_name = athlete_name.strip()
@@ -201,6 +206,7 @@ def save_new_athlete_profile(
     last_name = parts[1] if len(parts) > 1 else (raw_user_last_name or "")
 
     ath_id = None
+    # Maintien de la cohérence avec la contrainte de clé étrangère PostgreSQL si présente
     try:
         ath_check = supabase.table("athletes").select("id").eq("telegram_id", t_id).execute()
         if ath_check.data:
@@ -224,22 +230,39 @@ def save_new_athlete_profile(
             if res.data:
                 ath_id = res.data[0]["id"]
     except Exception as e:
-        logger.error(f"Erreur table athletes lors de l'onboarding ({t_id}): {e}")
+        logger.debug(f"Info contrainte athletes ({t_id}): {e}")
 
     if not ath_id:
         ath_id = f"local-{t_id}"
 
+    # Sauvegarde sur athlete_profiles (inclut telegram_id et identité)
     prof_data = {
         "athlete_id": ath_id,
+        "telegram_id": t_id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "username": username or "",
         "goal": goal,
         "default_equipment": default_equipment,
         "injuries_history": injuries,
+        "status": "active",
         "language": "fr"
     }
     try:
         supabase.table("athlete_profiles").upsert(prof_data, on_conflict="athlete_id").execute()
     except Exception as e:
-        logger.error(f"Erreur upsert athlete_profiles ({ath_id}): {e}")
+        # Si colonnes telegram_id/first_name pas encore créées sur athlete_profiles, fallback sans elles
+        if "column" in str(e).lower():
+            minimal_data = {
+                "athlete_id": ath_id,
+                "goal": goal,
+                "default_equipment": default_equipment,
+                "injuries_history": injuries,
+                "language": "fr"
+            }
+            supabase.table("athlete_profiles").upsert(minimal_data, on_conflict="athlete_id").execute()
+        else:
+            logger.error(f"Erreur upsert athlete_profiles ({ath_id}): {e}")
 
     return {
         "id": ath_id,
@@ -255,9 +278,10 @@ def save_new_athlete_profile(
     }
 
 
-def get_athlete_by_telegram_id(telegram_id: int | str) -> Dict[str, Any]:
+def get_athlete_profile(telegram_id: int | str) -> Dict[str, Any]:
     """
-    Récupère les données de l'athlète et son profil lié via son telegram_id.
+    Récupère le profil athlète directement depuis la table athlete_profiles via son telegram_id.
+    Aucun fallback limit(1) n'est appliqué pour éviter toute collision de données.
     """
     default_profile = {
         "id": None,
@@ -273,72 +297,104 @@ def get_athlete_by_telegram_id(telegram_id: int | str) -> Dict[str, Any]:
 
     try:
         t_id = int(telegram_id)
-        ath_resp = supabase.table("athletes").select("*").eq("telegram_id", t_id).execute()
-        if ath_resp.data and len(ath_resp.data) > 0:
-            ath = ath_resp.data[0]
-            ath_id = ath.get("id")
-            prof_resp = supabase.table("athlete_profiles").select("*").eq("athlete_id", ath_id).execute()
-            prof = prof_resp.data[0] if prof_resp.data else {}
+        # 1. Recherche directe dans athlete_profiles par telegram_id
+        try:
+            resp = supabase.table("athlete_profiles").select("*").eq("telegram_id", t_id).execute()
+            if resp.data and len(resp.data) > 0:
+                p = resp.data[0]
+                return {
+                    "id": p.get("athlete_id") or str(p.get("id", "")),
+                    "athlete_id": p.get("athlete_id") or str(p.get("id", "")),
+                    "first_name": p.get("first_name") or "Combattant",
+                    "last_name": p.get("last_name") or "",
+                    "username": p.get("username"),
+                    "telegram_id": t_id,
+                    "goal": p.get("goal") or "MMA / Combat",
+                    "default_equipment": p.get("default_equipment") or "Poids du corps",
+                    "injuries_history": p.get("injuries_history") or "aucune",
+                    "status": p.get("status", "active")
+                }
+        except Exception as col_err:
+            if "telegram_id" not in str(col_err):
+                raise col_err
 
+        # 2. Requête conjointe avec athletes si telegram_id n'est pas encore directement sur athlete_profiles
+        join_resp = supabase.table("athlete_profiles").select("*, athletes!inner(*)").eq("athletes.telegram_id", t_id).execute()
+        if join_resp.data and len(join_resp.data) > 0:
+            p = join_resp.data[0]
+            ath = p.get("athletes") or {}
+            ath_id = p.get("athlete_id") or ath.get("id")
             return {
                 "id": ath_id,
                 "athlete_id": ath_id,
-                "first_name": ath.get("first_name") or prof.get("first_name") or "Combattant",
-                "last_name": ath.get("last_name", ""),
-                "username": ath.get("username"),
+                "first_name": ath.get("first_name") or p.get("first_name") or "Combattant",
+                "last_name": ath.get("last_name") or p.get("last_name") or "",
+                "username": ath.get("username") or p.get("username"),
                 "telegram_id": t_id,
-                "goal": prof.get("goal") or ath.get("main_objective") or ath.get("goal") or "MMA / Combat",
-                "default_equipment": prof.get("default_equipment") or ath.get("available_equipment") or "Poids du corps",
-                "injuries_history": prof.get("injuries_history") or ath.get("injuries") or "aucune",
-                "status": ath.get("status", "active")
+                "goal": p.get("goal") or ath.get("main_objective") or ath.get("goal") or "MMA / Combat",
+                "default_equipment": p.get("default_equipment") or ath.get("available_equipment") or "Poids du corps",
+                "injuries_history": p.get("injuries_history") or ath.get("injuries") or "aucune",
+                "status": ath.get("status") or p.get("status") or "active"
             }
 
-        # Si non trouvé par telegram_id, tente de récupérer le premier profil existant
-        prof_resp = supabase.table("athlete_profiles").select("*").limit(1).execute()
-        if prof_resp.data:
-            p = prof_resp.data[0]
-            default_profile.update(p)
-            default_profile["id"] = p.get("athlete_id")
     except Exception as e:
-        logger.warning(f"Erreur recherche athlète {telegram_id}: {e}")
+        logger.warning(f"Erreur recherche athlete_profiles ({telegram_id}): {e}")
 
     return default_profile
 
 
+# Alias pour rétrocompatibilité totale
+get_athlete_by_telegram_id = get_athlete_profile
+
+
 def get_athlete_by_id(athlete_id: str) -> Dict[str, Any]:
     """
-    Récupère l'athlète et son profil par son identifiant UUID Supabase.
+    Récupère le profil athlète par son identifiant unique depuis athlete_profiles.
     """
     try:
-        ath_resp = supabase.table("athletes").select("*").eq("id", athlete_id).execute()
-        ath = ath_resp.data[0] if ath_resp.data else {}
-        prof_resp = supabase.table("athlete_profiles").select("*").eq("athlete_id", athlete_id).execute()
-        prof = prof_resp.data[0] if prof_resp.data else {}
-
-        return {
-            "id": athlete_id,
-            "athlete_id": athlete_id,
-            "first_name": ath.get("first_name", "Combattant"),
-            "last_name": ath.get("last_name", ""),
-            "username": ath.get("username"),
-            "telegram_id": ath.get("telegram_id"),
-            "goal": prof.get("goal") or ath.get("goal") or "MMA / Combat",
-            "default_equipment": prof.get("default_equipment", "Poids du corps"),
-            "injuries_history": prof.get("injuries_history", "aucune"),
-            "status": ath.get("status", "active")
-        }
+        resp = supabase.table("athlete_profiles").select("*, athletes(*)").eq("athlete_id", athlete_id).execute()
+        if resp.data and len(resp.data) > 0:
+            p = resp.data[0]
+            ath = p.get("athletes") or {}
+            return {
+                "id": athlete_id,
+                "athlete_id": athlete_id,
+                "first_name": p.get("first_name") or ath.get("first_name") or "Combattant",
+                "last_name": p.get("last_name") or ath.get("last_name") or "",
+                "username": p.get("username") or ath.get("username"),
+                "telegram_id": p.get("telegram_id") or ath.get("telegram_id"),
+                "goal": p.get("goal") or ath.get("goal") or "MMA / Combat",
+                "default_equipment": p.get("default_equipment") or ath.get("default_equipment") or "Poids du corps",
+                "injuries_history": p.get("injuries_history") or ath.get("injuries") or "aucune",
+                "status": p.get("status") or ath.get("status") or "active"
+            }
     except Exception as e:
         logger.warning(f"Erreur get_athlete_by_id {athlete_id}: {e}")
-        return {"id": athlete_id, "athlete_id": athlete_id, "first_name": "Athlète"}
+    return {"id": athlete_id, "athlete_id": athlete_id, "first_name": "Athlète", "goal": "MMA / Combat"}
 
 
 def get_all_athletes() -> List[Dict[str, Any]]:
     """
-    Liste tous les athlètes enregistrés dans Supabase.
+    Liste tous les profils d'athlètes enregistrés depuis athlete_profiles.
     """
     try:
-        resp = supabase.table("athletes").select("*").execute()
-        return resp.data or []
+        resp = supabase.table("athlete_profiles").select("*, athletes(*)").execute()
+        athletes = []
+        for p in (resp.data or []):
+            ath = p.get("athletes") or {}
+            ath_id = p.get("athlete_id") or ath.get("id")
+            athletes.append({
+                "id": ath_id,
+                "athlete_id": ath_id,
+                "first_name": p.get("first_name") or ath.get("first_name") or "Combattant",
+                "last_name": p.get("last_name") or ath.get("last_name") or "",
+                "username": p.get("username") or ath.get("username"),
+                "telegram_id": p.get("telegram_id") or ath.get("telegram_id"),
+                "goal": p.get("goal") or ath.get("goal") or "MMA / Combat",
+                "default_equipment": p.get("default_equipment") or ath.get("default_equipment") or "Poids du corps",
+                "status": p.get("status") or ath.get("status") or "active"
+            })
+        return athletes
     except Exception as e:
         logger.warning(f"Erreur get_all_athletes: {e}")
         return []

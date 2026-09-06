@@ -1,17 +1,26 @@
+"""
+Serveur Web Flask & Webhook Telegram 24/7 pour Coaching IA V2 ("Amazonian Samourai").
+Hébergé sur Render.
+"""
+import os
+import sys
+import asyncio
 import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+import threading
+from flask import Flask, request, jsonify
 from telegram import Update
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+
+# Configuration de l'encodage sur Windows si nécessaire
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from app.core.config import settings
-from app.core.supabase import get_supabase_client
-from app.api.v1.router import api_router
 from app.services.telegram_bot import (
     create_telegram_application,
-    get_telegram_bot_instance,
-    run_automatic_hebdo_summary
+    get_telegram_bot_instance
 )
 
 # Configuration des logs
@@ -19,103 +28,179 @@ logging.basicConfig(
     level=logging.INFO if not settings.DEBUG else logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger("coaching_ia_v2")
+logger = logging.getLogger("amazonian_samourai")
 
-scheduler = BackgroundScheduler()
+app = Flask(__name__)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Démarrage
-    logger.info("🚀 Démarrage du serveur Coaching IA V2...")
-    client = get_supabase_client()
-    if client:
-        logger.info("✅ Connexion Supabase active.")
-    else:
-        logger.warning("⚠️ Mode local/fallback actif (Supabase non configuré).")
-    
-    # Initialisation Telegram Bot & Webhook / Scheduler
+# Gestionnaire d'événements asyncio persistant pour python-telegram-bot
+_asyncio_loop = None
+_telegram_app = None
+_loop_lock = threading.Lock()
+
+
+def get_or_create_event_loop():
+    global _asyncio_loop
+    with _loop_lock:
+        if _asyncio_loop is None or _asyncio_loop.is_closed():
+            _asyncio_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_asyncio_loop)
+        return _asyncio_loop
+
+
+def init_bot_and_webhook():
+    """
+    Initialise l'application Telegram et configure le Webhook Render 24/7.
+    """
+    global _telegram_app
+    if _telegram_app is not None:
+        return _telegram_app
+
+    logger.info("🚀 Initialisation du Bot Telegram & Webhook...")
     telegram_app = create_telegram_application()
-    if telegram_app:
-        await telegram_app.initialize()
-        app.state.telegram_app = telegram_app
-        
-        # Configuration webhook si Render ou WEBHOOK_URL présent
-        webhook_url = getattr(settings, "WEBHOOK_URL", None)
-        if webhook_url:
-            full_webhook = f"{webhook_url.rstrip('/')}/telegram-webhook"
-            logger.info(f"Configuration du Webhook Telegram : {full_webhook}")
-            await telegram_app.bot.set_webhook(url=full_webhook)
-        else:
-            logger.info("Aucun WEBHOOK_URL détecté, mode polling ou webhook manuel.")
-
-    # Démarrage du scheduler pour le bilan hebdo (Dimanche à 08:00 Asia/Bangkok)
-    try:
-        scheduler.add_job(
-            run_automatic_hebdo_summary,
-            CronTrigger(day_of_week="sun", hour=8, minute=0, timezone="Asia/Bangkok"),
-            args=[get_telegram_bot_instance()],
-            id="automatic_hebdo_job",
-            replace_existing=True
-        )
-        scheduler.start()
-        logger.info("📅 Scheduler hebdo activé (Dimanche 08:00 Bangkok).")
-    except Exception as e:
-        logger.error(f- "Erreur initialisation scheduler: {e}")
-
-    yield
-
-    # Arrêt
-    logger.info("🛑 Arrêt du serveur Coaching IA V2...")
-    if scheduler.running:
-        scheduler.shutdown()
-    if hasattr(app.state, "telegram_app"):
-        await app.state.telegram_app.shutdown()
-
-
-app = FastAPI(
-    title="Coaching IA V2 - API",
-    description="Backend de Coaching de Performance & Sport de Combat (Readiness Engine, Multi-Agents, Supabase)",
-    version="2.0.0",
-    lifespan=lifespan
-)
-
-# Configuration CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Inclusion des routes API v1
-app.include_router(api_router, prefix="/api/v1")
-
-
-@app.post("/telegram-webhook")
-async def telegram_webhook(request: Request):
-    """
-    Endpoint recevant les mises à jour Telegram en mode Webhook 24/7 (Render).
-    """
-    telegram_app = getattr(app.state, "telegram_app", None)
     if not telegram_app:
-        return {"status": "error", "message": "Telegram app not initialized"}
-    
-    data = await request.json()
-    update = Update.de_json(data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return {"status": "ok"}
+        logger.error("❌ Impossible d'initialiser Telegram : TELEGRAM_BOT_TOKEN manquant.")
+        return None
+
+    loop = get_or_create_event_loop()
+    try:
+        loop.run_until_complete(telegram_app.initialize())
+        _telegram_app = telegram_app
+        logger.info("✅ Application Telegram initialisée avec succès.")
+
+        # Configuration du Webhook sur Render
+        render_url = (
+            os.getenv("RENDER_EXTERNAL_URL")
+            or getattr(settings, "RENDER_EXTERNAL_URL", None)
+            or getattr(settings, "WEBHOOK_URL", None)
+        )
+        webhook_secret = (
+            os.getenv("WEBHOOK_SECRET")
+            or getattr(settings, "WEBHOOK_SECRET", None)
+            or getattr(settings, "TELEGRAM_WEBHOOK_SECRET", None)
+        )
+
+        if render_url:
+            webhook_url = f"{render_url.rstrip('/')}/telegram-webhook"
+            logger.info(f"🌐 Enregistrement du Webhook Telegram sur : {webhook_url}")
+            loop.run_until_complete(
+                telegram_app.bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=webhook_secret or None
+                )
+            )
+            logger.info("✅ Webhook Telegram configuré 24/7 sur Render !")
+        else:
+            logger.info("ℹ️ RENDER_EXTERNAL_URL non configuré en local. Mode webhook prêt dès déploiement Render.")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de l'initialisation du bot/webhook : {e}", exc_info=True)
+
+    return _telegram_app
 
 
-@app.get("/", tags=["Root"])
-async def root():
-    return {
-        "message": "Bienvenue sur l'API Coaching IA Base V2",
-        "docs": "/docs",
-        "status": "online"
-    }
+@app.route("/", methods=["GET"])
+def health_check():
+    """
+    Endpoint de santé (Ping Render / UptimeRobot).
+    Permet de maintenir le serveur éveillé ou de tester son statut.
+    """
+    bot_ready = _telegram_app is not None
+    return jsonify({
+        "status": "online",
+        "service": "Amazonian Samourai - Coaching IA V2",
+        "bot_initialized": bot_ready,
+        "mode": "Webhook Flask 24/7"
+    }), 200
 
+
+@app.route("/telegram-webhook", methods=["POST"])
+def telegram_webhook():
+    """
+    Point d'entrée Webhook appelé par Telegram à chaque message ou interaction.
+    """
+    # 1. Vérification du secret token de sécurité si configuré
+    expected_secret = (
+        os.getenv("WEBHOOK_SECRET")
+        or getattr(settings, "WEBHOOK_SECRET", None)
+        or getattr(settings, "TELEGRAM_WEBHOOK_SECRET", None)
+    )
+    if expected_secret:
+        incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if incoming_secret != expected_secret:
+            logger.warning("⛔ Requête Webhook rejetée : token secret invalide.")
+            return jsonify({"error": "Unauthorized"}), 403
+
+    # 2. Vérification de l'initialisation du bot
+    global _telegram_app
+    if _telegram_app is None:
+        init_bot_and_webhook()
+        if _telegram_app is None:
+            logger.error("❌ Bot Telegram non initialisé lors de la réception du webhook.")
+            return jsonify({"error": "Bot not initialized"}), 500
+
+    # 3. Récupération des données Telegram
+    update_data = request.get_json(force=True, silent=True)
+    if not update_data:
+        logger.warning("⚠️ Payload webhook vide ou invalide.")
+        return jsonify({"status": "no data"}), 400
+
+    # 4. Traitement asynchrone de l'Update dans la boucle asyncio
+    try:
+        update = Update.de_json(update_data, _telegram_app.bot)
+        loop = get_or_create_event_loop()
+        loop.run_until_complete(_telegram_app.process_update(update))
+    except Exception as e:
+        logger.error(f"❌ Erreur traitement webhook Telegram : {e}", exc_info=True)
+        # On renvoie 200 pour éviter que Telegram ne boucle indéfiniment sur un message corrompu
+        return jsonify({"status": "error", "message": str(e)}), 200
+
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/set-webhook", methods=["GET", "POST"])
+def manual_set_webhook():
+    """
+    Route utilitaire pour forcer manuellement la reconfiguration du webhook si nécessaire.
+    """
+    app_bot = init_bot_and_webhook()
+    if not app_bot:
+        return jsonify({"error": "Bot unavailable"}), 500
+
+    render_url = (
+        request.args.get("url")
+        or os.getenv("RENDER_EXTERNAL_URL")
+        or getattr(settings, "RENDER_EXTERNAL_URL", None)
+        or getattr(settings, "WEBHOOK_URL", None)
+    )
+    if not render_url:
+        return jsonify({"error": "No URL specified. Pass ?url=https://your-service.onrender.com"}), 400
+
+    webhook_secret = (
+        os.getenv("WEBHOOK_SECRET")
+        or getattr(settings, "WEBHOOK_SECRET", None)
+        or getattr(settings, "TELEGRAM_WEBHOOK_SECRET", None)
+    )
+    webhook_url = f"{render_url.rstrip('/')}/telegram-webhook"
+    loop = get_or_create_event_loop()
+    try:
+        loop.run_until_complete(
+            app_bot.bot.set_webhook(url=webhook_url, secret_token=webhook_secret or None)
+        )
+        return jsonify({"status": "ok", "webhook_url": webhook_url}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def main():
+    port = int(os.getenv("PORT", getattr(settings, "PORT", 8000)))
+    host = os.getenv("HOST", getattr(settings, "HOST", "0.0.0.0"))
+    logger.info(f"🥋 Démarrage Serveur Flask Coaching IA V2 sur {host}:{port}...")
+    init_bot_and_webhook()
+    app.run(host=host, port=port)
+
+
+# Initialisation au chargement du module pour serveurs WSGI (gunicorn / render)
+init_bot_and_webhook()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)
+    main()

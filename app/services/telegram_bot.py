@@ -1,11 +1,13 @@
 import logging
 import re
+from typing import Optional, List, Dict, Any
 from telegram import (
     Update,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     Bot
 )
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -27,6 +29,7 @@ from app.services.gemini import (
 from app.services.supabase_service import (
     supabase,
     get_available_exercises,
+    get_athlete_profile,
     get_athlete_by_telegram_id,
     get_athlete_by_id,
     get_all_athletes,
@@ -52,7 +55,8 @@ def get_telegram_bot_instance() -> Optional[Bot]:
     if _global_telegram_application and _global_telegram_application.bot:
         return _global_telegram_application.bot
     if settings.TELEGRAM_BOT_TOKEN:
-        return Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        req = HTTPXRequest(connect_timeout=20.0, read_timeout=20.0)
+        return Bot(token=settings.TELEGRAM_BOT_TOKEN, request=req)
     return None
 
 
@@ -408,7 +412,7 @@ async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_T
     Traite le texte utilisateur (qu'il vienne d'un message direct ou d'une transcription audio).
     """
     user_id = update.effective_user.id
-    athlete = get_athlete_by_telegram_id(user_id)
+    athlete = get_athlete_profile(user_id)
     athlete_id = athlete.get("id")
     athlete_name = athlete.get("first_name", "Combattant")
 
@@ -547,7 +551,8 @@ def create_telegram_application():
         logger.error("TELEGRAM_BOT_TOKEN manquant.")
         return None
 
-    application = ApplicationBuilder().token(token).build()
+    request = HTTPXRequest(connect_timeout=20.0, read_timeout=20.0)
+    application = ApplicationBuilder().token(token).request(request).build()
 
     # 1. Tunnel d'Onboarding Interactif (/start)
     onboarding_conv = ConversationHandler(

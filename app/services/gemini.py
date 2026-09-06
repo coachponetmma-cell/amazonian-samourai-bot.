@@ -41,7 +41,7 @@ def _call_gemini_with_retry(prompt: str, schema=None):
     """
     Exécute l'appel à Gemini avec retry et fallback automatique entre gemini-3.6-flash et gemini-2.5-flash.
     """
-    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
 
     for model in models_to_try:
         for attempt in range(3):
