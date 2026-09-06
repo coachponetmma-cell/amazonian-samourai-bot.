@@ -447,7 +447,7 @@ async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_T
             "<b>🥋 DÉBRIEFING ENREGISTRÉ EN BDD !</b>\n\n"
             f"Bien reçu <b>{athlete_name}</b>. Séance validée avec un RPE réel de <b>{rpe_val}/10</b>.\n\n"
             f"💬 <i>{coach_msg}</i>\n\n"
-            "💡 <i>Ton Head Coach verra ces données dans son bilan /hebdo. Repos et hydratation !</i>\n\n"
+            "💡 <i>Tes données ont été transmises au Head Coach pour ton suivi de performance. Place à la récupération !</i>\n\n"
             "🔥 <b>Libertad & Performance.</b>"
         )
         await send_safe_html_message(update.message, debrief_reply)
