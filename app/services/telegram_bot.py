@@ -26,6 +26,7 @@ from app.services.gemini import (
     transcribe_audio_with_gemini,
     parse_debrief_with_gemini
 )
+from app.models.schemas import DailyCheckinInput, ReadinessResult, ReadinessStatus
 from app.services.supabase_service import (
     supabase,
     get_available_exercises,
@@ -48,6 +49,68 @@ logger = logging.getLogger(__name__)
 ASK_NAME, ASK_GOAL, ASK_EQUIPMENT, ASK_INJURIES = range(4)
 
 _global_telegram_application = None
+
+
+def _split_full_name(value: str):
+    """Sépare un nom saisi en prénom/nom selon le contrat historique du bot."""
+    parts = (value or "").strip().split()
+    if not parts:
+        return "", ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _athlete_name(profile: dict, fallback: str = "Combattant") -> str:
+    """Retourne le nom quelle que soit la forme de profil renvoyée par Supabase."""
+    if profile.get("full_name"):
+        return str(profile["full_name"])
+    first = (profile.get("first_name") or "").strip()
+    last = (profile.get("last_name") or "").strip()
+    return " ".join(part for part in (first, last) if part) or fallback
+
+
+def _is_debrief(text: str) -> bool:
+    """Détecte un retour de séance sans confondre une demande de programme."""
+    lowered = (text or "").lower()
+    return any(token in lowered for token in (
+        "séance validée", "séance terminée", "séance faite", "débrief", "debrief", "rpe"
+    )) and not any(token in lowered for token in ("programme", "quelle séance", "donne-moi", "prépare"))
+
+
+def _extract_rpe(text: str):
+    match = re.search(r"\brpe\s*[:=]?\s*(10|[1-9])(?:\s*/\s*10)?\b", text or "", re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def calculate_module2_readiness(checkin: DailyCheckinInput):
+    """Calcule la readiness historique sur une échelle de 1 à 5."""
+    score = round(
+        0.25 * checkin.sleep_score
+        + 0.25 * checkin.energy_score
+        + 0.20 * (6 - checkin.fatigue_score)
+        + 0.15 * (6 - checkin.stress_score)
+        + 0.15 * (6 - checkin.soreness_score),
+        1,
+    )
+    if score >= 4.0:
+        label, status, cap, volume = "FORME_OPTIMALE", ReadinessStatus.GREEN, None, 1.0
+        recommendation = "Séance complète selon le plan."
+    elif score >= 2.5:
+        label, status, cap, volume = "CHARGE_MODEREE", ReadinessStatus.ORANGE, 7, 0.8
+        recommendation = "Réduire l'intensité et le volume, sans forcer."
+    else:
+        label, status, cap, volume = "RECUPERATION_ACTIVE", ReadinessStatus.RED, 5, 0.5
+        recommendation = "Priorité à la récupération active et à la mobilité."
+    result = ReadinessResult(
+        score=score,
+        status=status,
+        details={"sleep": checkin.sleep_score, "energy": checkin.energy_score,
+                 "fatigue": checkin.fatigue_score, "stress": checkin.stress_score,
+                 "soreness": checkin.soreness_score},
+        intensity_cap_rpe=cap,
+        volume_multiplier=volume,
+        recommendation=recommendation,
+    )
+    return score, label, result
 
 
 def get_telegram_bot_instance() -> Optional[Bot]:
@@ -407,100 +470,140 @@ async def run_automatic_hebdo_summary(bot_instance: Bot):
 # 4. TRAITEMENT DES MESSAGES TEXTE & VOCAUX
 # ==============================================================================
 
-async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
-    """
-    Traite le texte utilisateur (qu'il vienne d'un message direct ou d'une transcription audio).
-    """
+async def _send_missing_checkin_prompt(target, context: ContextTypes.DEFAULT_TYPE, missing_info: str):
+    """Présente uniquement les boutons nécessaires pour compléter le check-in."""
+    if missing_info == "energy":
+        text = "Salut ! Comment te sens-tu aujourd'hui au niveau énergie ? 💪"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔴 Fatigué (1-4)", callback_data="checkin_energy_3")],
+            [InlineKeyboardButton("🟡 En forme (5-7)", callback_data="checkin_energy_6")],
+            [InlineKeyboardButton("🟢 Au top (8-10)", callback_data="checkin_energy_9")],
+        ])
+    else:
+        text = "Où te trouves-tu pour la séance du jour ?"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Chambre / Poids du corps", callback_data="checkin_equipment_bodyweight")],
+            [InlineKeyboardButton("🏋️ Salle / Matériel complet", callback_data="checkin_equipment_gym")],
+        ])
+    await send_safe_html_message(target, text, reply_markup=keyboard)
+
+
+async def _generate_workout_from_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                           user_text: str, analysis: Any, target,
+                                           status_message=None):
+    """Enregistre le check-in et génère la séance à partir d'une analyse validée."""
     user_id = update.effective_user.id
     athlete = get_athlete_profile(user_id)
     athlete_id = athlete.get("id")
-    athlete_name = athlete.get("first_name", "Combattant")
+    if athlete_id:
+        log_checkin(athlete_id=athlete_id, analysis=analysis, raw_text=user_text)
 
+    equipment = analysis.equipment_available or athlete.get("default_equipment", "Poids du corps")
+    exercises = get_available_exercises(equipment)
+    workout_plan = generate_daily_workout(analysis, exercises, athlete)
+
+    if athlete_id:
+        prescribed_rpe = getattr(analysis, "rpe", None) or 7
+        log_workout_generation(
+            athlete_id=athlete_id,
+            prescribed_rpe=prescribed_rpe,
+            summary_text=f"Séance {equipment} - Énergie {analysis.energy_score}/10"
+        )
+
+    finish_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ J'ai terminé ma séance !", callback_data="finish_workout")]
+    ])
+    response_message = (
+        f"<b>{analysis.feedback_coach}</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📋 <b>TA SÉANCE DU JOUR</b>\n\n"
+        f"{workout_plan}"
+    )
+    if status_message:
+        await status_message.delete()
+    await send_safe_html_message(target, response_message, reply_markup=finish_keyboard)
+
+
+async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
+    """Traite un check-in texte ou la transcription d'un vocal."""
+    user_id = update.effective_user.id
+    athlete = get_athlete_profile(user_id)
+    athlete_name = athlete.get("first_name", "Combattant")
     lower_text = user_text.lower()
 
-    # --- DÉTECTION DÉBRIEFING DE SÉANCE ---
-    # Déclenché si l'utilisateur avait cliqué sur le bouton OU s'il exprime clairement une fin de séance
     awaiting_feedback = context.user_data.get("awaiting_workout_feedback", False)
     is_debrief_keywords = any(w in lower_text for w in [
         "séance terminée", "seance terminee", "séance faite", "seance faite",
         "débrief", "debrief", "fini la séance", "fini ma séance", "rpe"
     ]) and not any(w in lower_text for w in ["programme", "quelle séance", "donne-moi", "prépare"])
-
     if awaiting_feedback or is_debrief_keywords:
-        # Analyse du retour (RPE réel et sensations)
         debrief_data = parse_debrief_with_gemini(user_text)
         rpe_val = debrief_data.get("rpe_real", 7)
         coach_msg = debrief_data.get("coach_reply", "Séance validée guerrier !")
-
-        # Enregistrement dans workout_logs sur Supabase avec telegram_id, completed: True, rpe_real, feedback_text
-        log_workout_completion(
-            athlete_id=athlete_id,
-            telegram_id=user_id,
-            rpe_real=rpe_val,
-            feedback_text=user_text,
-            completed=True
-        )
-
+        log_workout_completion(athlete_id=athlete.get("id"), telegram_id=user_id,
+                               rpe_real=rpe_val, feedback_text=user_text, completed=True)
         context.user_data["awaiting_workout_feedback"] = False
-
-        debrief_reply = (
+        await send_safe_html_message(update.message, (
             "<b>🥋 DÉBRIEFING ENREGISTRÉ EN BDD !</b>\n\n"
             f"Bien reçu <b>{athlete_name}</b>. Séance validée avec un RPE réel de <b>{rpe_val}/10</b>.\n\n"
             f"💬 <i>{coach_msg}</i>\n\n"
-            "💡 <i>Tes données ont été transmises au Head Coach pour ton suivi de performance. Place à la récupération !</i>\n\n"
+            "💡 <i>Tes données ont été transmises au Head Coach. Place à la récupération !</i>\n\n"
             "🔥 <b>Libertad & Performance.</b>"
-        )
-        await send_safe_html_message(update.message, debrief_reply)
+        ))
         return
 
-    # --- CHECK-IN QUOTIDIEN & GÉNÉRATION DE SÉANCE ---
-    typing_msg = await update.message.reply_text(
-        "⏳ <i>Analyse de ton check-in et préparation de ta séance...</i>",
-        parse_mode="HTML"
-    )
-
     try:
-        # 1. Analyse du check-in par Gemini
         analysis = analyze_checkin_with_gemini(user_text)
+        if not analysis.is_valid_checkin:
+            context.user_data["pending_checkin"] = {"raw_text": user_text}
+            await _send_missing_checkin_prompt(update.message, context, analysis.missing_info or "energy")
+            return
 
-        # 2. Enregistrement du check-in dans Supabase
-        if athlete_id:
-            log_checkin(athlete_id=athlete_id, analysis=analysis, raw_text=user_text)
-
-        # 3. Filtrage 100 % étanche des exercices selon le matériel disponible
-        equipment = analysis.equipment_available or athlete.get("default_equipment", "Poids du corps")
-        exercises = get_available_exercises(equipment)
-
-        # 4. Génération de la séance au format HTML Telegram VIP
-        workout_plan = generate_daily_workout(analysis, exercises, athlete)
-
-        # 5. Enregistrement de la séance prescrite dans workout_logs
-        if athlete_id:
-            prescribed_rpe = getattr(analysis, "rpe", None) or 7
-            log_workout_generation(
-                athlete_id=athlete_id,
-                prescribed_rpe=prescribed_rpe,
-                summary_text=f"Séance {equipment} - Énergie {analysis.energy_score}/10"
-            )
-
-        # 6. Bouton Inline "Finir la séance"
-        finish_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ J'ai terminé ma séance !", callback_data="finish_workout")]
-        ])
-
-        response_message = (
-            f"<b>{analysis.feedback_coach}</b>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📋 <b>TA SÉANCE DU JOUR</b>\n\n"
-            f"{workout_plan}"
+        status_message = await update.message.reply_text(
+            "⏳ <i>Analyse de ton check-in et préparation de ta séance en cours...</i>",
+            parse_mode="HTML"
         )
-
-        await typing_msg.delete()
-        await send_safe_html_message(update.message, response_message, reply_markup=finish_keyboard)
-
+        await _generate_workout_from_analysis(update, context, user_text, analysis,
+                                              update.message, status_message)
     except Exception as e:
         logger.error(f"Erreur traitement checkin : {e}", exc_info=True)
-        await typing_msg.edit_text(f"❌ Erreur lors de la génération de la séance : {e}")
+        await send_safe_html_message(update.message, f"❌ Erreur lors du traitement du check-in : {e}")
+
+
+async def handle_checkin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Complète le check-in avec le choix inline puis relance le flux smart."""
+    query = update.callback_query
+    await query.answer()
+    pending = context.user_data.get("pending_checkin") or {}
+    raw_text = pending.get("raw_text", "")
+    data = query.data or ""
+    if data.startswith("checkin_energy_"):
+        value = data.rsplit("_", 1)[-1]
+        addition = f"Énergie du jour : {value}/10."
+    elif data == "checkin_equipment_bodyweight":
+        addition = "Lieu et matériel du jour : chambre, poids du corps, sans matériel."
+    elif data == "checkin_equipment_gym":
+        addition = "Lieu et matériel du jour : salle complète, matériel de musculation disponible."
+    else:
+        return
+
+    combined_text = f"{raw_text}\n{addition}".strip()
+    try:
+        analysis = analyze_checkin_with_gemini(combined_text)
+        if not analysis.is_valid_checkin:
+            context.user_data["pending_checkin"] = {"raw_text": combined_text}
+            await _send_missing_checkin_prompt(query.message, context, analysis.missing_info or "energy")
+            return
+        context.user_data.pop("pending_checkin", None)
+        status_message = await query.message.reply_text(
+            "⏳ <i>Analyse de ton check-in et préparation de ta séance en cours...</i>",
+            parse_mode="HTML"
+        )
+        await _generate_workout_from_analysis(update, context, combined_text, analysis,
+                                              query.message, status_message)
+    except Exception as e:
+        logger.error(f"Erreur callback check-in : {e}", exc_info=True)
+        await send_safe_html_message(query.message, f"❌ Erreur lors de la génération de la séance : {e}")
 
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -571,7 +674,8 @@ def create_telegram_application():
     # 2. Commandes Coach & Utilitaires
     application.add_handler(CommandHandler("hebdo", handle_hebdo_command))
 
-    # 3. Callback Query : Bouton "J'ai terminé ma séance !"
+    # 3. Callback Query : check-in smart puis bouton de fin de séance
+    application.add_handler(CallbackQueryHandler(handle_checkin_callback, pattern="^checkin_(energy|equipment)_"))
     application.add_handler(CallbackQueryHandler(handle_finish_workout_callback, pattern="^finish_workout$"))
 
     # 4. Messages Texte (Check-ins et Débriefings hors onboarding)

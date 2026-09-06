@@ -1,6 +1,6 @@
+import logging
 import re
 import time
-import logging
 from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
@@ -72,25 +72,59 @@ def _call_gemini_with_retry(prompt: str, schema=None):
 
 
 def analyze_checkin_with_gemini(raw_text: str) -> GeminiCheckinAnalysis:
-    """
-    Analyse le message de check-in de l'athlète et extrait l'état de forme et le matériel.
-    """
+    """Analyse un check-in et indique explicitement les informations bloquantes."""
     prompt = f"""
-    Tu es le Head Coach du Samourai Performance System (Jason Ponet, Amazonian Samourai).
-    Analyse le message de check-in quotidien de l'athlète :
-    
-    MISSIONS :
-    1. Extrais les notes sur 10 (sommeil, énergie, fatigue, stress, courbatures/douleurs, RPE) si mentionnées.
-    2. Identifie impérativement la contrainte de lieu et le matériel disponible :
-       - Si l'athlète mentionne être à l'hôtel, en chambre, en déplacement, ou sans matériel, indique expressément "Chambre d'hôtel sans matériel" ou "Poids du corps".
-       - S'il a du matériel spécifique (ex: 1 kettlebell 16kg, élastique, 2 haltères 10kg), liste-le précisément.
-       - S'il est en salle complète, indique "Salle complète".
-    3. Rédige un retour coach incisif, direct, motivant et guerrier ("Libertad & Performance"). Pas de blabla, va droit au but.
+Tu es le Head Coach du Samourai Performance System.
+Analyse le message de l'athlète et réponds uniquement avec le schéma JSON fourni.
 
-    Message de l'athlète : "{raw_text}"
-    """
+RÈGLES DE VALIDITÉ :
+- is_valid_checkin vaut true uniquement si le message contient une indication exploitable
+  du niveau d'énergie (échelle 1 à 10, ou qualificatif clairement convertible) ET du lieu
+  ou matériel disponible aujourd'hui.
+- Si l'énergie manque, missing_info vaut "energy".
+- Sinon, si le lieu/matériel manque, missing_info vaut "location_equipment".
+- Si les deux informations sont présentes, missing_info vaut null.
+- Ne déduis pas le lieu ou le matériel à partir du profil habituel : il faut une indication
+  dans le message du jour.
+- energy_level doit être compris entre 1 et 10. Les qualificatifs "fatigué", "en forme"
+  et "au top" correspondent respectivement à 3, 6 et 9.
+- equipment doit décrire précisément le lieu et le matériel, ou rester null s'il est absent.
+- notes regroupe sommeil, fatigue, douleurs, stress, RPE et toute contrainte utile.
+- Conserve aussi les champs historiques quand l'information est disponible : energy_score,
+  equipment_available, sleep_score, fatigue_score, stress_score, soreness_score, rpe et
+  feedback_coach.
+
+Message de l'athlète :
+{raw_text}
+"""
     response = _call_gemini_with_retry(prompt, schema=GeminiCheckinAnalysis)
-    return response.parsed
+    analysis = response.parsed
+
+    # Certains modèles remplissent la structure imbriquée sans recopier les champs historiques.
+    # Cette normalisation maintient la compatibilité avec la génération et Supabase.
+    data = analysis.extracted_data
+    if analysis.energy_score is None:
+        analysis.energy_score = data.energy_level
+    if analysis.equipment_available is None:
+        analysis.equipment_available = data.equipment
+    if analysis.energy_score is not None and data.energy_level is None:
+        data.energy_level = analysis.energy_score
+    if analysis.equipment_available and not data.equipment:
+        data.equipment = analysis.equipment_available
+
+    missing = []
+    if analysis.energy_score is None:
+        missing.append("energy")
+    if not analysis.equipment_available:
+        missing.append("location_equipment")
+    analysis.missing_fields = missing
+    if missing:
+        analysis.is_valid_checkin = False
+        analysis.missing_info = missing[0]
+    else:
+        analysis.is_valid_checkin = True
+        analysis.missing_info = None
+    return analysis
 
 
 def generate_daily_workout(analysis: Any, exercises_list: list, athlete_profile: dict) -> str:
