@@ -370,3 +370,252 @@ def parse_debrief_with_gemini(raw_text: str) -> Dict[str, Any]:
         "coach_reply": f"Bien reçu guerrier ! Séance validée à RPE {rpe_val}/10. Hydrate-toi et focus sur la récupération ! 🔥 Libertad & Performance."
     }
 
+
+# ==============================================================================
+# CERVEAU NUTRITIONNEL & SUIVI "POIDS DE COMBAT" (JASON PONET)
+# ==============================================================================
+
+AMAZONIAN_SYSTEM_PROMPT = """Tu es l'"Amazonian Samourai Performance Coach", l'intelligence artificielle officielle et exclusive du système d'entraînement et de nutrition fondé par Jason Ponet, athlète professionnel de MMA et coach avec 20 ans d'expérience.
+
+=== TON IDENTITÉ ET TON TON ===
+- Tu es direct, bienveillant, orienté performance, pragmatique et sans bullshit.
+- Tu t'adresses à des combattants, des athlètes exigeants ou des sportifs déterminés.
+- Signature constante : "🔥 Libertad & Performance".
+
+=== RÈGLE DE SÉCURITÉ INVIOLABLE (INTERDICTION STRICTE DE WATER CUT) ===
+- TU AS L'INTERDICTION TOTALE ET ABSOLUE de conseiller, suggérer ou détailler tout protocole de déshydratation aiguë ("water cut", sudation par sauna, bains chauds, combinaison de sudation, manipulation violente du sodium/eau), de jeûne extrême, de "tapering" pré-combat agressif ou de protocole de reconstitution post-pesée dans tes réponses automatisées.
+- Ces protocoles extrêmes sont FORMELLEMENT RÉSERVÉS aux entretiens humains personnalisés de la Cellule Élite directement supervisés par le Head Coach Jason Ponet.
+- Si un athlète t'interroge sur un water cut ou une coupe d'eau d'urgence, réponds fermement : "En tant qu'IA, je n'interviens jamais sur la déshydratation ou les coupes d'eau extrêmes : cela relève exclusivement d'un suivi médical et humain avec le Head Coach. Nous travaillons ici sur le Moteur de 12 semaines pour bâtir un vrai physique de combat durable."
+
+=== PILIER 1 : LE SUIVI SPORTIF ===
+- Tu conçois et ajustes des séances de cross-training, calisthenics, kettlebells, rowing, adaptées au matériel disponible et à l'environnement de l'athlète.
+- Tu intègres la logique de gestion de la fatigue (Readiness, méthode French Contrast, adaptation du volume/intensité selon le système nerveux).
+- Tu valides les séances terminées, récupères le RPE réel (de 1 à 10) et ajustes la charge.
+
+=== PILIER 2 : LE SUIVI NUTRITIONNEL (Basé sur "Poids de combat") ===
+- Moteur de 12 semaines (Engine A — Perte de gras progressive) : Toute la programmation repose sur une recomposition corporelle saine et progressive sur 12 semaines.
+- Tu appliques la règle des 3 zones : 1/2 de légumes, 1/4 de protéines de qualité, 1/4 de glucides complexes autour de l'entraînement.
+- Règles nutritionnelles absolues :
+  * Déficit calorique intelligent et maîtrisé (-300 à -500 kcal max par jour) pour perdre du gras sans détruire la masse musculaire.
+  * Autour de 2 g par kilo de poids de corps en protéines cibles pour blinder la masse musculaire.
+  * 0,8 à 1 g par kilo de lipides de sécurité minimum (ne jamais descendre en dessous, vital pour le système hormonal).
+  * Glucides modulés stratégiquement autour des séances.
+
+=== RÈGLE D'OR DE SAGESSE IA : "NE RIEN CHANGER" ===
+- La balance fluctue chaque jour (eau, glycogène, digestion, stress). NE RÉAGIS JAMAIS à une variation ponctuelle sur 24 ou 48h.
+- Analyse toujours la TENDANCE SUR 7 JOURS.
+- Si la tendance sur 7 jours est favorable (perte de gras progressive ou poids stable selon l'objectif) et que le niveau d'énergie de l'athlète est solide (>= 6/10), ta consigne absolue est : NE RIEN CHANGER. Pas de coupe de calories précipitée, pas d'augmentation de volume inutile. On laisse le moteur tourner.
+
+=== CONFIDENCE ENGINE (ANTI-HALLUCINATION VISUELLE) ===
+- Si une photo d'assiette ou de repas est floue, mal cadrée, trop sombre, ou si le contenu est ambigu (sauce opaque recouvrant le plat, bol mélangé indiscernable, portion impossible à estimer) :
+  INTERDICTION FORMELLE D'INVENTER DES MACROS OU DES CALORIES PRÉCISES.
+- Fais preuve d'humilité et de franchise : indique à l'athlète ce que tu distingues et demande-lui une clarification simple (ex: "Je vois bien les féculents, mais quelle est la protéine sous la sauce et la portion approximative ?") ou suggère-lui de reprendre une photo plus nette.
+
+=== GESTION DES CAS PARTICULIERS ===
+- Gestion de la phase lutéale : Si une athlète féminine observe une stagnation ou une prise temporaire sur la balance en phase lutéale, rappelle-lui calmement que la balance ment à cause des hormones et de la rétention d'eau, et qu'il ne faut pas paniquer ni couper les calories.
+- Gestion de la faim émotionnelle liée au stress : En cas d'envie impulsive de manger liée au stress, aide l'athlète à dissocier le stress de la nourriture (conseille de boire un grand verre d'eau ou un thé, d'attendre 15-20 minutes, et de pratiquer une hygiène nerveuse).
+- Douleurs / Signaux d'alerte : Face à une douleur aiguë, vertige ou malaise, arrêter immédiatement l'effort et orienter vers le Head Coach / avis médical.
+
+Tu incarnes l'autorité, la rigueur et la fraternité martiale de Jason Ponet."""
+
+
+def calculate_target_macros(weight_kg: float, activity_level: str = "modere") -> Dict[str, int]:
+    """
+    Calcule les macronutriments cibles selon la méthode 'Poids de combat' de Jason Ponet :
+    - Protéines : ~2g/kg de poids de corps
+    - Lipides : min 0.8 à 1g/kg (sécurisé à 0.9g/kg, minimum 50g)
+    - Déficit calorique maîtrisé : -300 à -400 kcal
+    - Glucides : carburant restant pour l'énergie d'entraînement
+    """
+    w = float(weight_kg)
+    act = (activity_level or "").lower().strip()
+
+    # Facteur multiplicateur calorique estimé
+    if any(k in act for k in ["combattant", "athlete", "intense", "tres_actif", "très actif", "pro"]):
+        factor = 37.0
+    elif any(k in act for k in ["actif", "sportif", "elevé", "eleve"]):
+        factor = 34.0
+    elif any(k in act for k in ["sedentaire", "sédentaire", "faible", "bureau"]):
+        factor = 29.0
+    else:  # Modéré par défaut
+        factor = 32.0
+
+    tdee = w * factor
+    # Déficit maîtrisé de -350 kcal pour perdre du gras sans détruire la masse musculaire
+    target_calories = max(int(tdee - 350), 1500)
+
+    # Protéines cibles : ~2g/kg
+    target_proteins = round(w * 2.0)
+    # Lipides de sécurité : min 0.8 à 1g/kg (jamais en-dessous)
+    target_fats = max(round(w * 0.9), 50)
+    # Glucides : solde calorique divisé par 4 kcal
+    calories_from_prot_fat = (target_proteins * 4) + (target_fats * 9)
+    remaining_calories = max(target_calories - calories_from_prot_fat, 400)
+    target_carbs = round(remaining_calories / 4)
+
+    return {
+        "calories": target_calories,
+        "proteins": target_proteins,
+        "fats": target_fats,
+        "carbs": target_carbs
+    }
+
+
+def analyze_nutrition_entry(
+    photo_bytes: Optional[bytes] = None,
+    text_content: Optional[str] = None,
+    athlete_profile: Optional[Dict[str, Any]] = None,
+    mime_type: str = "image/jpeg"
+) -> str:
+    """
+    Analyse un repas, une assiette (OCR vision 3 zones) ou une capture d'application tierce (MyFitnessPal),
+    ou une saisie textuelle de macros/ressentis selon les règles nutritionnelles de Jason Ponet.
+    """
+    prof = athlete_profile or {}
+    athlete_name = prof.get("first_name") or "Guerrier"
+    weight_kg = prof.get("weight_kg") or "Non spécifié"
+    nutrition_mode = prof.get("nutrition_mode") or "ocr_vision"
+    target_cals = prof.get("target_calories") or "Calculé selon poids"
+    target_prots = prof.get("target_proteins") or "2g/kg"
+    target_fats = prof.get("target_fats") or "0.8-1g/kg"
+    target_carbs = prof.get("target_carbs") or "Carburant entraînement"
+
+    mode_instructions = ""
+    if nutrition_mode == "ocr_vision":
+        mode_instructions = (
+            "L'athlète a choisi le Mode A : Pratique / Visuel (OCR Assiette).\n"
+            "Si une photo d'assiette est fournie, applique scrupuleusement la règle des 3 zones :\n"
+            "- 1/2 de légumes (fibres, micronutriments, satiété)\n"
+            "- 1/4 de protéines de qualité (~30-40g selon la cible)\n"
+            "- 1/4 de glucides complexes (carburant autour du training)\n"
+            "Donne un feedback visuel direct, clair et constructif, en indiquant si les proportions sont respectées et les ajustements recommandés."
+        )
+    else:
+        mode_instructions = (
+            "L'athlète a choisi le Mode B : Rigoureux / Application tierce (MyFitnessPal, etc.).\n"
+            "Si une capture d'écran ou des macros textuelles sont fournies, extrait ou analyse les totaux (calories, protéines, lipides, glucides).\n"
+            "Valide les totaux par rapport à ses cibles personnelles, rappelle la sécurité absolue des lipides (>= 0.8-1g/kg) et la cible protéique (~2g/kg)."
+        )
+
+    context_prompt = f"""
+{AMAZONIAN_SYSTEM_PROMPT}
+
+=== CONTEXTE ATHLÈTE ===
+- Athlète : {athlete_name}
+- Poids de corps : {weight_kg} kg
+- Mode nutritionnel configuré : {nutrition_mode}
+- Cibles personnelles : {target_cals} kcal | Protéines : {target_prots}g | Lipides : {target_fats}g | Glucides : {target_carbs}g
+
+=== DIRECTIVE SPÉCIFIQUE DU MODE ===
+{mode_instructions}
+
+=== RÈGLE STRICTE DU CONFIDENCE ENGINE (ANTI-HALLUCINATION) ===
+Si la photo fournie est floue, coupée, trop sombre, ou si le contenu de l'assiette/de la capture est impossible à identifier avec certitude (sauce opaque masquant l'aliment, préparation mélangée indiscernable) :
+INTERDICTION FORMELLE d'inventer des chiffres, calories ou grammes fictifs !
+Indique honnêtement ce qui est identifiable et pose une question de clarification directe et bienveillante pour demander :
+1. Quels sont les ingrédients exacts présents ?
+2. Quelle est la portion approximative ?
+(ou invite l'athlète à renvoyer une photo plus nette avec un bon angle).
+
+=== FORMATAGE DE SORTIE (TELEGRAM HTML STRICT) ===
+- RÈGLE ABSOLUE : N'utilise AUCUN Markdown ('**', '##', '#', '__').
+- Utilise EXCLUSIVEMENT du HTML Telegram valide : <b>Gras</b>, <i>Italique</i>, <code>code</code>.
+- Structure ta réponse avec autorité et bienveillance :
+  1. 🥗 <b>ANALYSE NUTRITIONNELLE — POIDS DE COMBAT</b>
+  2. Diagnostic du plat ou des macros (points forts et ajustements immédiats).
+  3. Conseil concret pour le prochain repas ou autour de l'entraînement.
+  4. Signature : 🔥 <i>Libertad & Performance.</i>
+
+Message / Légende de l'athlète :
+"{text_content or 'Photo transmise pour analyse'}"
+"""
+
+    models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+    for model in models_to_try:
+        try:
+            content_parts = []
+            if photo_bytes:
+                content_parts.append(types.Part.from_bytes(data=photo_bytes, mime_type=mime_type))
+            content_parts.append(context_prompt)
+
+            config = types.GenerateContentConfig(temperature=0.2)
+            response = client.models.generate_content(
+                model=model,
+                contents=content_parts,
+                config=config
+            )
+            if response and response.text:
+                return clean_telegram_html(response.text)
+        except Exception as e:
+            logger.warning(f"Erreur analyse nutrition Gemini sur {model}: {e}")
+            continue
+
+    # Fallback si l'IA est temporairement indisponible
+    return clean_telegram_html(
+        f"<b>🥗 ANALYSE NUTRITIONNELLE REÇUE</b>\n\n"
+        f"Bien reçu <b>{athlete_name}</b> ! Tes données de repas ont bien été transmises au système.\n\n"
+        "💡 <i>Rappel Poids de combat : Vise 1/2 légumes, 1/4 protéines (~2g/kg/j) et 1/4 glucides complexes. Garde toujours un minimum de 0.8 à 1g de lipides par kilo.</i>\n\n"
+        "🔥 <b>Libertad & Performance.</b>"
+    )
+
+
+def evaluate_wisdom_guidance(
+    weight_trend_7d_kg: float,
+    avg_energy: float,
+    current_weight: Optional[float] = None,
+    target_weight: Optional[float] = None
+) -> Dict[str, Any]:
+    """
+    Applique le moteur de Sagesse IA et la règle du 'Ne rien changer'.
+    Si la perte de gras est saine ou le poids stable avec une bonne énergie,
+    on sanctuarise le plan sans ajustement impulsif.
+    """
+    if -1.2 <= weight_trend_7d_kg <= -0.1 and avg_energy >= 6.0:
+        return {
+            "action": "keep_course",
+            "rule": "Règle d'or : Ne rien changer",
+            "decision": "VALIDER_SANS_MODIFICATION",
+            "message": (
+                f"Tendance 7j idéale ({weight_trend_7d_kg:+.1f} kg) avec un niveau d'énergie solide ({avg_energy:.1f}/10). "
+                "Le moteur de 12 semaines fonctionne à plein régime. Règle d'or du coach : On ne touche à rien, continue exactement ainsi !"
+            )
+        }
+    elif -0.1 < weight_trend_7d_kg <= 0.3 and avg_energy >= 6.0:
+        return {
+            "action": "keep_course",
+            "rule": "Règle de stabilité : Recomposition & Patience",
+            "decision": "VALIDER_SANS_MODIFICATION",
+            "message": (
+                f"Poids stabilisé sur 7 jours ({weight_trend_7d_kg:+.1f} kg) avec une énergie excellente ({avg_energy:.1f}/10). "
+                "Le corps se recompose en profondeur. Règle du coach : Pas d'ajustement intempestif, on maintient le cap !"
+            )
+        }
+    elif weight_trend_7d_kg < -1.5:
+        return {
+            "action": "alert_drop",
+            "rule": "Vigilance Perte Brutale",
+            "decision": "ALERTE_PERTE_TROP_RAPIDE",
+            "message": (
+                f"Perte de poids trop rapide ({weight_trend_7d_kg:+.1f} kg sur 7j). "
+                "Attention au risque de fonte musculaire ou de déshydratation. Maintiens bien tes apports caloriques et tes glucides de combat."
+            )
+        }
+    elif weight_trend_7d_kg > 1.2:
+        return {
+            "action": "check_fluid_or_intake",
+            "rule": "Analyse Fluctuations",
+            "decision": "VERIFIER_RETENTION_OU_CYCLE",
+            "message": (
+                f"Hausse temporaire notée ({weight_trend_7d_kg:+.1f} kg). "
+                "Rappelle-toi : la balance reflète l'eau, le sel et le glycogène (ou la phase lutéale). Pas de panique, reste strict sur tes 3 zones sans couper les calories."
+            )
+        }
+    else:
+        return {
+            "action": "standard",
+            "rule": "Suivi Régulier",
+            "decision": "STANDARD",
+            "message": "Continue d'enregistrer tes pesées et tes séances avec discipline. Libertad & Performance."
+        }
+
+

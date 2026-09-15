@@ -24,8 +24,12 @@ from app.services.gemini import (
     generate_weekly_coach_summary,
     clean_telegram_html,
     transcribe_audio_with_gemini,
-    parse_debrief_with_gemini
+    parse_debrief_with_gemini,
+    analyze_nutrition_entry,
+    calculate_target_macros,
+    evaluate_wisdom_guidance
 )
+from app.services.reporting import generate_weekly_report_chart
 from app.models.schemas import DailyCheckinInput, ReadinessResult, ReadinessStatus
 from app.services.supabase_service import (
     supabase,
@@ -39,14 +43,27 @@ from app.services.supabase_service import (
     log_workout_generation,
     log_workout_completion,
     log_checkin,
+    log_nutrition_entry,
     get_last_7_days_workout_logs,
-    get_last_7_days_checkins
+    get_last_7_days_checkins,
+    log_daily_metric,
+    get_athlete_metrics_history,
+    check_and_trigger_coach_alerts
 )
 
 logger = logging.getLogger(__name__)
 
-# États pour le tunnel d'onboarding ConversationHandler
-ASK_NAME, ASK_GOAL, ASK_EQUIPMENT, ASK_INJURIES = range(4)
+# États pour le tunnel d'onboarding ConversationHandler (5 étapes structurées)
+(
+    ASK_NAME,
+    ASK_TRACKING_TYPE,
+    ASK_NUTRITION_MODE,
+    ASK_WEIGHT_AND_ACTIVITY,
+    ASK_SERVICE_TIER,
+    ASK_GOAL,
+    ASK_EQUIPMENT,
+    ASK_INJURIES
+) = range(8)
 
 _global_telegram_application = None
 
@@ -179,7 +196,7 @@ async def send_safe_html_message(message_or_bot, text: str, reply_markup: Inline
 
 
 # ==============================================================================
-# 1. TUNNEL D'ONBOARDING INTERACTIF (/start)
+# 1. TUNNEL D'ONBOARDING INTERACTIF (/start) — 5 ÉTAPES FLUIDES
 # ==============================================================================
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -187,7 +204,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     Point d'entrée de la commande /start.
     Vérifie si l'athlète existe déjà dans athlete_profiles :
       - Si oui : Message d'accueil "Bon retour guerrier !"
-      - Si non : Déclenche le tunnel d'onboarding en 4 étapes.
+      - Si non : Déclenche le tunnel d'onboarding en 5 étapes.
     """
     user = update.effective_user
     user_id = user.id
@@ -196,7 +213,7 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if athlete_profile_exists(user_id):
         welcome_back_text = (
             "🥋 <b>Bon retour guerrier !</b>\n\n"
-            "Envoie ton check-in du jour pour recevoir ta séance.\n\n"
+            "Envoie ton check-in du jour pour recevoir ta séance, ou la photo de ton plat pour analyser tes macros.\n\n"
             "🔥 <i>Libertad & Performance.</i>"
         )
         await send_safe_html_message(update.message, welcome_back_text)
@@ -210,10 +227,10 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["raw_last_name"] = user.last_name or ""
 
     intro_text = (
-        "🥋 <b>BIENVENUE DANS LE SAMOURAI PERFORMANCE SYSTEM !</b>\n\n"
-        "Je suis ton coach IA haute performance, conçu pour les combattants de MMA et athlètes exigeants.\n\n"
-        "Avant de concevoir ta première séance sur-mesure, nous allons configurer ton profil athlète en 4 étapes rapides.\n\n"
-        "👉 <b>Étape 1/4 :</b> Quel est ton <b>Nom et Prénom</b> (ou nom de combattant) ?"
+        "🥋 <b>BIENVENUE DANS L'AMAZONIAN SAMOURAI PERFORMANCE SYSTEM !</b>\n\n"
+        "Je suis ton coach IA haute performance, fondé sur la méthode de Jason Ponet pour les combattants de MMA et athlètes exigeants.\n\n"
+        "Avant de concevoir tes séances et calibrer ta nutrition 'Poids de combat', nous allons configurer ton profil athlète en 5 étapes rapides.\n\n"
+        "👉 <b>Étape 1/5 :</b> Quel est ton <b>Nom et Prénom</b> (ou nom de combattant) ?"
     )
     await send_safe_html_message(update.message, intro_text)
     return ASK_NAME
@@ -221,67 +238,296 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def handle_onboarding_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Étape 1/4 : Récupère le nom/prénom et demande l'objectif.
+    Étape 1/5 : Récupère le nom/prénom et propose le choix du type de suivi.
     """
     name = update.message.text.strip()
     context.user_data["athlete_name"] = name
 
+    tracking_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏋️ Suivi Sportif seul", callback_data="track_sport")],
+        [InlineKeyboardButton("🥗 Suivi Nutritionnel ('Poids de combat')", callback_data="track_nutrition")],
+        [InlineKeyboardButton("⚡ Les Deux (Sport & Nutrition)", callback_data="track_both")],
+    ])
+
     step2_text = (
         f"Enchanté <b>{name}</b> ! 👊\n\n"
-        "🎯 <b>Étape 2/4 :</b> Quel est ton <b>objectif principal</b> ?\n\n"
-        "<i>(Exemples : MMA / Combat, Prépa Physique, Cardio & Perte de poids, Force / Explosivité...)</i>"
+        "🎯 <b>Étape 2/5 : Quel type de suivi souhaites-tu activer ?</b>\n\n"
+        "• <b>Suivi Sportif :</b> Séances sur-mesure (Cross-training, Calisthenics, Kettlebells, French Contrast), gestion de la fatigue et débriefings RPE.\n"
+        "• <b>Suivi Nutritionnel :</b> Méthode 'Poids de combat' (déficit intelligent, ~2g/kg protéines, seuil lipides de sécurité).\n"
+        "• <b>Les Deux :</b> L'écosystème complet pour maximiser ta puissance et affûter ton poids."
     )
-    await send_safe_html_message(update.message, step2_text)
+    await send_safe_html_message(update.message, step2_text, reply_markup=tracking_keyboard)
+    return ASK_TRACKING_TYPE
+
+
+async def handle_onboarding_tracking_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Étape 2/5 : Récupère le choix de suivi (sport, nutrition, both) via bouton ou texte.
+    """
+    tracking_type = "both"
+    target_msg = update.message
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        data = update.callback_query.data or ""
+        target_msg = update.callback_query.message
+        if "sport" in data:
+            tracking_type = "sport"
+        elif "nutrition" in data:
+            tracking_type = "nutrition"
+        else:
+            tracking_type = "both"
+    elif update.message and update.message.text:
+        text = update.message.text.lower()
+        if "sport" in text and "nutrition" not in text:
+            tracking_type = "sport"
+        elif "nutrition" in text and "sport" not in text:
+            tracking_type = "nutrition"
+        else:
+            tracking_type = "both"
+
+    context.user_data["tracking_type"] = tracking_type
+
+    # Si l'athlète choisit uniquement le sport, on passe directement au niveau de service (Étape 4)
+    if tracking_type == "sport":
+        context.user_data["nutrition_mode"] = None
+        tier_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🥋 Loisir & Déterminé (95% IA)", callback_data="segment_loisir")],
+            [InlineKeyboardButton("⚡ Cellule Élite (Suivi Pro)", callback_data="segment_elite")],
+        ])
+        step4_text = (
+            "C'est noté pour le <b>Suivi Sportif</b> ! 🏋️\n\n"
+            "🥋 <b>Étape 4/5 : Quel est ton segment de coaching ?</b>\n\n"
+            "• <b>Loisir & Déterminé (95% IA) :</b> Autonomie complète, programmation personnalisée et réactivité 24/7.\n"
+            "• <b>Cellule Élite (Suivi Pro) :</b> Suivi haute performance réservé aux combattants, supervisé avec alertes intelligentes transmises au Head Coach Jason Ponet."
+        )
+        await send_safe_html_message(target_msg, step4_text, reply_markup=tier_keyboard)
+        return ASK_SERVICE_TIER
+
+    # Sinon (Nutrition ou Les Deux), on propose le choix du mode nutritionnel (Étape 3)
+    nutri_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Mode A : Pratique / Visuel (OCR Assiette)", callback_data="nutri_ocr")],
+        [InlineKeyboardButton("📊 Mode B : Rigoureux (App tierce / Saisie)", callback_data="nutri_app")],
+    ])
+
+    step3_text = (
+        "C'est noté pour le <b>Suivi Nutritionnel ('Poids de combat')</b> ! 🥗\n\n"
+        "👉 <b>Étape 3/5 : Quel est ton mode de suivi préféré pour tes repas ?</b>\n\n"
+        "• <b>Mode A : Pratique / Visuel (OCR Assiette)</b>\n"
+        "Prends simplement une photo de ton plat : l'IA analyse visuellement la règle des 3 zones (1/2 légumes, 1/4 protéines, 1/4 glucides) et te fait un retour instantané.\n\n"
+        "• <b>Mode B : Rigoureux (App tierce / Saisie)</b>\n"
+        "Envoie une capture d'écran de ton application (type MyFitnessPal) ou tes macros textuelles au gramme près pour validation."
+    )
+    await send_safe_html_message(target_msg, step3_text, reply_markup=nutri_keyboard)
+    return ASK_NUTRITION_MODE
+
+
+async def handle_onboarding_nutrition_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Étape 3/5 (a) : Enregistre le mode nutritionnel choisi puis demande le poids et l'activité.
+    """
+    nutrition_mode = "ocr_vision"
+    target_msg = update.message
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        data = update.callback_query.data or ""
+        target_msg = update.callback_query.message
+        if "app" in data:
+            nutrition_mode = "app_tierce"
+        else:
+            nutrition_mode = "ocr_vision"
+    elif update.message and update.message.text:
+        text = update.message.text.lower()
+        if any(k in text for k in ["app", "tierce", "myfitnesspal", "mfp", "rigoureux", "saisie"]):
+            nutrition_mode = "app_tierce"
+        else:
+            nutrition_mode = "ocr_vision"
+
+    context.user_data["nutrition_mode"] = nutrition_mode
+    mode_label = "Mode A (Pratique / Visuel — OCR Assiette)" if nutrition_mode == "ocr_vision" else "Mode B (Rigoureux — App tierce / Saisie)"
+
+    prompt_weight_text = (
+        f"✅ <b>{mode_label} activé !</b>\n\n"
+        "⚖️ Pour calibrer scientifiquement tes macros cibles selon la méthode de Jason Ponet (~2g/kg de protéines, minimum 0.8 à 1g/kg de lipides, déficit modéré sans fonte musculaire) :\n\n"
+        "👉 <b>Quel est ton poids de corps actuel (en kg)</b> et ton <b>niveau d'activité habituel</b> ?\n\n"
+        "<i>(Exemples : '76 kg, très actif MMA' ou '82 kg, modéré 3 entraînements/semaine')</i>"
+    )
+    await send_safe_html_message(target_msg, prompt_weight_text)
+    return ASK_WEIGHT_AND_ACTIVITY
+
+
+async def handle_onboarding_weight_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Étape 3/5 (b) : Parse le poids et l'activité, calcule les macros cibles et enchaîne sur l'Étape 4 (Niveau de service).
+    """
+    user_text = update.message.text.strip()
+    
+    # Extraction du poids (en kg)
+    weight_match = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)?", user_text, re.IGNORECASE)
+    if weight_match:
+        weight_kg = float(weight_match.group(1).replace(",", "."))
+    else:
+        weight_kg = 75.0
+
+    context.user_data["weight_kg"] = weight_kg
+    context.user_data["activity_level"] = user_text
+
+    # Calcul scientifique déterministe des macros cibles
+    macros = calculate_target_macros(weight_kg, user_text)
+    context.user_data["target_calories"] = macros["calories"]
+    context.user_data["target_proteins"] = macros["proteins"]
+    context.user_data["target_fats"] = macros["fats"]
+    context.user_data["target_carbs"] = macros["carbs"]
+
+    tier_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥋 Loisir & Déterminé (95% IA)", callback_data="segment_loisir")],
+        [InlineKeyboardButton("⚡ Cellule Élite (Suivi Pro)", callback_data="segment_elite")],
+    ])
+
+    summary_macros_text = (
+        "🔥 <b>CIBLES NUTRITIONNELLES INITIALISÉES ('POIDS DE COMBAT') :</b>\n\n"
+        f"• <b>Poids de référence :</b> {weight_kg} kg\n"
+        f"• <b>Calories cibles :</b> ~<b>{macros['calories']} kcal/jour</b> (déficit maîtrisé pour sécher sans perdre de muscle)\n"
+        f"• <b>Protéines :</b> ~<b>{macros['proteins']} g/jour</b> (~2g/kg pour blinder la masse musculaire)\n"
+        f"• <b>Lipides :</b> ~<b>{macros['fats']} g/jour</b> (sécurité hormonale absolue, min 0.8-1g/kg)\n"
+        f"• <b>Glucides :</b> ~<b>{macros['carbs']} g/jour</b> (carburant stratégique pour tes séances)\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🥋 <b>Étape 4/5 : Quel est ton segment de coaching ?</b>\n\n"
+        "• <b>Loisir & Déterminé (95% IA) :</b> Programmation et analyse de repas instantanés 24/7.\n"
+        "• <b>Cellule Élite (Suivi Pro) :</b> Suivi haute performance réservé aux combattants, supervisé avec alertes intelligentes transmises au Head Coach Jason Ponet."
+    )
+    await send_safe_html_message(update.message, summary_macros_text, reply_markup=tier_keyboard)
+    return ASK_SERVICE_TIER
+
+
+async def handle_onboarding_service_tier(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Étape 4/5 : Récupère le segment (loisir ou elite) et le niveau de service (100%_ia ou hybride).
+    """
+    segment = "loisir"
+    service_tier = "100%_ia"
+    target_msg = update.message
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        data = (update.callback_query.data or "").lower()
+        target_msg = update.callback_query.message
+        if "elite" in data or "hybride" in data:
+            segment = "elite"
+            service_tier = "hybride"
+        else:
+            segment = "loisir"
+            service_tier = "100%_ia"
+    elif update.message and update.message.text:
+        text = update.message.text.lower()
+        if any(k in text for k in ["elite", "élite", "hybride", "coach", "jason", "2", "pro"]):
+            segment = "elite"
+            service_tier = "hybride"
+        else:
+            segment = "loisir"
+            service_tier = "100%_ia"
+
+    context.user_data["segment"] = segment
+    context.user_data["service_tier"] = service_tier
+    tier_label = "⚡ Cellule Élite (Suivi Pro supervisé par Jason Ponet)" if segment == "elite" else "🥋 Loisir & Déterminé (95% IA)"
+
+    tracking_type = context.user_data.get("tracking_type", "both")
+
+    if tracking_type in ["sport", "both"]:
+        step5_text = (
+            f"✅ <b>{tier_label} sélectionné !</b>\n\n"
+            "🎯 <b>Étape 5/5 : Paramètres d'entraînement</b>\n\n"
+            "Quel est ton <b>objectif principal</b> et éventuellement ton <b>poids de combat cible</b> ?\n\n"
+            "<i>(Exemples : 'Prépa combat MMA, cible 70 kg', 'Explosivité & Force', 'Cardio & Sèche...')</i>"
+        )
+    else:
+        step5_text = (
+            f"✅ <b>{tier_label} sélectionné !</b>\n\n"
+            "🎯 <b>Étape 5/5 : Objectif silhouette & combat</b>\n\n"
+            "Quel est ton <b>objectif principal</b> et ton <b>poids de combat cible</b> (en kg) ?\n\n"
+            "<i>(Exemples : 'Perte de gras, cible 68 kg', 'Sèche musculaire', 'Maintien et énergie...')</i>"
+        )
+
+    await send_safe_html_message(target_msg, step5_text)
     return ASK_GOAL
 
 
 async def handle_onboarding_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Étape 2/4 : Récupère l'objectif et demande le lieu / matériel par défaut.
+    Étape 5/5 (a) : Récupère l'objectif et demande le matériel ou les contraintes.
     """
     goal = update.message.text.strip()
     context.user_data["goal"] = goal
 
-    step3_text = (
-        "C'est noté ! 🎯\n\n"
-        "🏋️ <b>Étape 3/4 :</b> Quel est ton <b>lieu d'entraînement habituel et ton matériel disponible par défaut</b> ?\n\n"
-        "<i>(Exemples : Poids du corps / Chambre d'hôtel, Salle complète (Gym), 1 Kettlebell 16kg + élastiques...)</i>"
-    )
-    await send_safe_html_message(update.message, step3_text)
-    return ASK_EQUIPMENT
+    target_match = re.search(r"(?:cible|objectif|vis[ée]|viser)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:kg)?", goal, re.IGNORECASE)
+    if target_match:
+        context.user_data["target_weight_kg"] = float(target_match.group(1).replace(",", "."))
+    tracking_type = context.user_data.get("tracking_type", "both")
+
+    if tracking_type in ["sport", "both"]:
+        step_eq_text = (
+            "C'est noté ! 🎯\n\n"
+            "🏋️ Quel est ton <b>lieu d'entraînement habituel et ton matériel disponible par défaut</b> ?\n\n"
+            "<i>(Exemples : Poids du corps / Chambre d'hôtel, Salle complète (Gym), 1 Kettlebell 16kg + élastiques...)</i>"
+        )
+        await send_safe_html_message(update.message, step_eq_text)
+        return ASK_EQUIPMENT
+    else:
+        # Suivi nutritionnel pur : pas besoin de matériel sportif
+        context.user_data["default_equipment"] = "Aucun (Suivi Nutritionnel)"
+        step_inj_text = (
+            "Parfait ! 🎯\n\n"
+            "🩹 As-tu des <b>allergies, intolérances alimentaires ou contraintes médicales</b> à prendre en compte ?\n\n"
+            "<i>(Réponds 'Aucune' si tout est OK, ou précise)</i>"
+        )
+        await send_safe_html_message(update.message, step_inj_text)
+        return ASK_INJURIES
 
 
 async def handle_onboarding_equipment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Étape 3/4 : Récupère le matériel et demande les blessures/contraintes physiques.
+    Étape 5/5 (b) : Récupère le matériel et demande les blessures/contraintes physiques.
     """
     equipment = update.message.text.strip()
     context.user_data["default_equipment"] = equipment
 
-    step4_text = (
+    step_inj_text = (
         "Parfait pour l'équipement ! ⚙️\n\n"
-        "🩹 <b>Étape 4/4 :</b> As-tu des <b>blessures récentes, douleurs ou contraintes physiques</b> à prendre en compte ?\n\n"
+        "🩹 As-tu des <b>blessures récentes, douleurs ou contraintes physiques</b> à prendre en compte ?\n\n"
         "<i>(Réponds 'Aucune' si tout est opérationnel, ou précise : ex. genou droit sensible, épaule gauche fragile...)</i>"
     )
-    await send_safe_html_message(update.message, step4_text)
+    await send_safe_html_message(update.message, step_inj_text)
     return ASK_INJURIES
 
 
 async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Étape 4/4 : Récupère les blessures, enregistre le profil dans Supabase et clôture l'onboarding.
-    Notifie également automatiquement le Head Coach.
+    Étape 5/5 (c) : Récupère les contraintes/blessures, enregistre le profil complet dans Supabase
+    et notifie le Head Coach Jason Ponet.
     """
     injuries = update.message.text.strip()
     context.user_data["injuries"] = injuries
 
     telegram_id = context.user_data.get("telegram_id") or update.effective_user.id
     name = context.user_data.get("athlete_name", update.effective_user.first_name)
-    goal = context.user_data.get("goal", "MMA / Combat")
+    goal = context.user_data.get("goal", "MMA / Performance")
     equipment = context.user_data.get("default_equipment", "Poids du corps")
     username = context.user_data.get("username") or update.effective_user.username or ""
     raw_first = context.user_data.get("raw_first_name") or update.effective_user.first_name or ""
     raw_last = context.user_data.get("raw_last_name") or update.effective_user.last_name or ""
+    
+    tracking_type = context.user_data.get("tracking_type", "both")
+    nutrition_mode = context.user_data.get("nutrition_mode")
+    service_tier = context.user_data.get("service_tier", "100%_ia")
+    segment = context.user_data.get("segment", "loisir")
+    weight_kg = context.user_data.get("weight_kg")
+    target_weight_kg = context.user_data.get("target_weight_kg")
+    activity_level = context.user_data.get("activity_level")
+    target_calories = context.user_data.get("target_calories")
+    target_proteins = context.user_data.get("target_proteins")
+    target_fats = context.user_data.get("target_fats")
+    target_carbs = context.user_data.get("target_carbs")
 
     # Sauvegarde complète dans Supabase (athletes + athlete_profiles)
     save_new_athlete_profile(
@@ -292,7 +538,18 @@ async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAU
         injuries=injuries,
         username=username,
         raw_user_first_name=raw_first,
-        raw_user_last_name=raw_last
+        raw_user_last_name=raw_last,
+        tracking_type=tracking_type,
+        nutrition_mode=nutrition_mode,
+        service_tier=service_tier,
+        weight_kg=weight_kg,
+        activity_level=activity_level,
+        target_calories=target_calories,
+        target_proteins=target_proteins,
+        target_fats=target_fats,
+        target_carbs=target_carbs,
+        segment=segment,
+        target_weight_kg=target_weight_kg
     )
 
     # Notification automatique vers le COACH_TELEGRAM_ID
@@ -303,8 +560,13 @@ async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAU
                 "<b>🔔 NOUVEL ATHLÈTE INSCRIT SUR LE BOT</b>\n\n"
                 f"<b>Nom :</b> {name}\n"
                 f"<b>Telegram ID :</b> <code>{telegram_id}</code> (@{username or 'N/A'})\n"
+                f"<b>Segment :</b> {segment.upper()}\n"
+                f"<b>Suivi activé :</b> {tracking_type.upper()}\n"
+                f"<b>Mode Nutrition :</b> {nutrition_mode or 'N/A'}\n"
+                f"<b>Niveau de service :</b> {service_tier}\n"
+                f"<b>Poids actuel :</b> {weight_kg or 'N/A'} kg | <b>Cible :</b> {target_weight_kg or 'N/A'} kg\n"
                 f"<b>Objectif :</b> {goal}\n"
-                f"<b>Matériel par défaut :</b> {equipment}\n"
+                f"<b>Matériel :</b> {equipment}\n"
                 f"<b>Blessures / Contraintes :</b> {injuries}\n\n"
                 "🔥 <i>Prêt pour le combat.</i>"
             )
@@ -312,14 +574,34 @@ async def handle_onboarding_injuries(update: Update, context: ContextTypes.DEFAU
         except Exception as e:
             logger.error(f"Erreur notification nouvel athlète au coach: {e}")
 
+    # Instructions de démarrage personnalisées selon le suivi activé
+    if tracking_type == "sport":
+        start_instruction = (
+            "🏋️ <b>POUR DÉMARRER TON ENTRAÎNEMENT :</b>\n"
+            "Envoie dès maintenant ton <b>check-in quotidien</b> (texte ou vocal) décrivant ton sommeil, ton énergie (sur 10) et ton lieu du jour pour recevoir ta première séance sur-mesure !"
+        )
+    elif tracking_type == "nutrition":
+        start_instruction = (
+            "🥗 <b>POUR DÉMARRER TA NUTRITION 'POIDS DE COMBAT' :</b>\n"
+            "Dès ton prochain repas, envoie une <b>photo de ton assiette</b> (Mode Visuel) ou une <b>capture MyFitnessPal / tes macros</b> (Mode Rigoureux) pour analyse instantanée !"
+        )
+    else:
+        start_instruction = (
+            "⚡ <b>POUR DÉMARRER :</b>\n"
+            "• <b>Entraînement :</b> Envoie ton check-in (énergie/sommeil/lieu) pour recevoir ta séance sur-mesure.\n"
+            "• <b>Nutrition :</b> Envoie la photo de ton plat ou tes macros dès ton prochain repas pour validation !"
+        )
+
     final_text = (
         "✅ <b>PROFIL ATHLÈTE ENREGISTRÉ AVEC SUCCÈS !</b>\n\n"
         f"🥋 <b>Guerrier :</b> {name}\n"
+        f"⚡ <b>Suivi :</b> {tracking_type.upper()} | <b>Service :</b> {service_tier}\n"
         f"🎯 <b>Objectif :</b> {goal}\n"
-        f"🏋️ <b>Matériel par défaut :</b> {equipment}\n"
-        f"🩹 <b>Contraintes :</b> {injuries}\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "👊 Tu es paré. Pour recevoir ta séance personnalisée, <b>envoie dès maintenant ton premier check-in quotidien</b> (texte ou vocal) décrivant ton sommeil, ton énergie (sur 10) et ton environnement du jour.\n\n"
+        f"🏋️ <b>Matériel :</b> {equipment}\n"
+        f"🩹 <b>Contraintes :</b> {injuries}\n"
+        + (f"🥗 <b>Cibles :</b> {target_calories} kcal | {target_proteins}g P | {target_fats}g L | {target_carbs}g G\n" if target_calories else "") +
+        "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{start_instruction}\n\n"
         "🔥 <i>Libertad & Performance.</i>"
     )
     await send_safe_html_message(update.message, final_text)
@@ -423,7 +705,21 @@ async def handle_hebdo_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
         summary_html = generate_weekly_coach_summary(logs=logs, athlete_info=target_athlete, checkins=checkins)
 
+        # Génération du graphique Matplotlib Dark Samourai
+        metrics_history = get_athlete_metrics_history(athlete_id=target_id, days=7)
+        chart_bytes = generate_weekly_report_chart(target_athlete, metrics_history)
+
         await status_msg.delete()
+        if chart_bytes:
+            try:
+                await update.message.reply_photo(
+                    photo=chart_bytes,
+                    caption=f"📈 <b>Bilan Visuel Samourai — {target_athlete.get('first_name', 'Athlète')}</b>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Impossible d'envoyer le graphique hebdo: {e}")
+
         await send_safe_html_message(update.message, summary_html)
 
     except Exception as e:
@@ -459,11 +755,90 @@ async def run_automatic_hebdo_summary(bot_instance: Bot):
 
             # Ne générer que s'il y a un minimum d'activité ou de profil
             summary_html = generate_weekly_coach_summary(logs=logs, athlete_info=target_athlete, checkins=checkins)
+            metrics_history = get_athlete_metrics_history(athlete_id=ath_id, days=7)
+            chart_bytes = generate_weekly_report_chart(target_athlete, metrics_history)
+
+            if chart_bytes:
+                try:
+                    await bot_instance.send_photo(
+                        chat_id=int(coach_id),
+                        photo=chart_bytes,
+                        caption=f"📈 <b>Bilan Hebdo — {target_athlete.get('first_name', 'Athlète')}</b>",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.warning(f"Impossible d'envoyer le graphique hebdo auto: {e}")
+
             await send_safe_html_message(bot_instance, summary_html, chat_id=int(coach_id))
 
         logger.info("✅ Bilans hebdo automatiques envoyés au Head Coach avec succès.")
     except Exception as e:
         logger.error(f"Erreur lors de l'exécution automatique des bilans hebdo: {e}", exc_info=True)
+
+
+async def handle_bilan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Commande /bilan ou /tendance pour l'athlète :
+    Génère et renvoie son graphique Dark Samourai avec l'analyse de tendance et les conseils de sagesse IA ("Ne rien changer").
+    """
+    user_id = update.effective_user.id
+    athlete = get_athlete_profile(user_id)
+    athlete_id = athlete.get("id")
+    if not athlete_id:
+        await send_safe_html_message(
+            update.message,
+            "⚠️ <b>Profil non configuré</b> : Tape <code>/start</code> pour initialiser ton profil athlète."
+        )
+        return
+
+    status_msg = await update.message.reply_text(
+        "⏳ <i>Génération de ton bilan graphique et analyse de ta tendance en cours...</i>",
+        parse_mode="HTML"
+    )
+
+    try:
+        metrics_history = get_athlete_metrics_history(athlete_id=athlete_id, days=7)
+        chart_bytes = generate_weekly_report_chart(athlete, metrics_history)
+
+        # Calcul de la tendance 7j et sagesse IA
+        weights = [m["weight_kg"] for m in metrics_history if m.get("weight_kg") is not None]
+        trend_7d = (weights[-1] - weights[0]) if len(weights) >= 2 else 0.0
+        energies = [m["energy_score"] for m in metrics_history if m.get("energy_score") is not None]
+        avg_energy = (sum(energies) / len(energies)) if energies else 7.0
+
+        wisdom = evaluate_wisdom_guidance(
+            weight_trend_7d_kg=trend_7d,
+            avg_energy=avg_energy,
+            current_weight=athlete.get("weight_kg"),
+            target_weight=athlete.get("target_weight_kg")
+        )
+
+        caption = (
+            f"<b>📊 BILAN DE PERFORMANCE — {athlete.get('first_name', 'Guerrier').upper()}</b>\n\n"
+            f"🥋 <b>Segment :</b> {(athlete.get('segment') or 'loisir').upper()}\n"
+            f"⚖️ <b>Poids actuel :</b> {athlete.get('weight_kg', 'N/A')} kg | <b>Cible :</b> {athlete.get('target_weight_kg', 'N/A')} kg\n"
+            f"📈 <b>Tendance 7j :</b> {trend_7d:+.2f} kg | <b>Énergie moy :</b> {avg_energy:.1f}/10\n\n"
+            f"💡 <b>{wisdom['rule']} :</b>\n<i>{wisdom['message']}</i>\n\n"
+            "🔥 <b>Libertad & Performance.</b>"
+        )
+
+        await status_msg.delete()
+        if chart_bytes:
+            try:
+                await update.message.reply_photo(
+                    photo=chart_bytes,
+                    caption=clean_telegram_html(caption),
+                    parse_mode="HTML"
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Erreur envoi photo bilan: {e}")
+
+        await send_safe_html_message(update.message, caption)
+
+    except Exception as e:
+        logger.error(f"Erreur commande /bilan: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Erreur lors de la génération du bilan : {e}")
 
 
 # ==============================================================================
@@ -497,6 +872,24 @@ async def _generate_workout_from_analysis(update: Update, context: ContextTypes.
     athlete_id = athlete.get("id")
     if athlete_id:
         log_checkin(athlete_id=athlete_id, analysis=analysis, raw_text=user_text)
+        log_daily_metric(
+            athlete_id=athlete_id,
+            telegram_id=user_id,
+            energy_score=analysis.energy_score,
+            fatigue_score=getattr(analysis, "fatigue_score", None),
+            sleep_score=getattr(analysis, "sleep_score", None),
+            notes=user_text
+        )
+        await check_and_trigger_coach_alerts(
+            athlete_profile=athlete,
+            event_type="checkin",
+            data={
+                "analysis": analysis,
+                "energy_score": analysis.energy_score,
+                "fatigue_score": getattr(analysis, "fatigue_score", None)
+            },
+            bot_instance=context.bot
+        )
 
     equipment = analysis.equipment_available or athlete.get("default_equipment", "Poids du corps")
     exercises = get_available_exercises(equipment)
@@ -525,12 +918,93 @@ async def _generate_workout_from_analysis(update: Update, context: ContextTypes.
 
 
 async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
-    """Traite un check-in texte ou la transcription d'un vocal."""
+    """
+    Traite un message texte ou transcrit :
+    0. Détection prioritaire des mots-clés critiques (blessure, malaise, douleur aiguë).
+    1. Détection des pesées quotidiennes (poids, tendance 7j, Sagesse IA 'Ne rien changer').
+    2. Débriefing de séance terminée (RPE réel et enregistrement daily_metrics).
+    3. Suivi nutritionnel / repas / questions sur le poids de combat.
+    4. Check-in d'entraînement quotidien & génération de séance.
+    """
     user_id = update.effective_user.id
     athlete = get_athlete_profile(user_id)
     athlete_name = athlete.get("first_name", "Combattant")
     lower_text = user_text.lower()
 
+    # 0. Détection prioritaire des signaux d'alerte critiques
+    critical_keywords = [
+        "blessure", "douleur aiguë", "douleur aigue", "vertige", "vertiges",
+        "malaise", "malaises", "craqué", "craque", "claquage", "claqué",
+        "déchirure", "dechirure", "fracture", "bloqué", "bloque le dos"
+    ]
+    if any(cw in lower_text for cw in critical_keywords):
+        await check_and_trigger_coach_alerts(
+            athlete_profile=athlete,
+            event_type="critical_keyword",
+            data={"text": user_text},
+            bot_instance=context.bot
+        )
+        alert_reply = (
+            f"⚠️ <b>ALERTE DE SÉCURITÉ — {athlete_name.upper()} !</b>\n\n"
+            "Tu as mentionné une douleur aiguë ou un signal corporel critique.\n\n"
+            "🛑 <b>CONSIGNE IMMÉDIATE DU COACH :</b>\n"
+            "• Arrête tout entraînement immédiatement.\n"
+            "• Ne force absolument pas sur la douleur.\n"
+            "• Ton Head Coach Jason Ponet a été prévenu en priorité.\n\n"
+            "💡 <i>Hydrate-toi et consulte un professionnel de santé si la douleur persiste.</i>\n\n"
+            "🔥 <b>Libertad & Sécurité.</b>"
+        )
+        await send_safe_html_message(update.message, alert_reply)
+        return
+
+    # 1. Détection explicite de pesée (ex: "74.5 kg", "poids: 76 kg", "pesée 75.2")
+    weight_match = re.search(r"\b(?:pes[ée]e?|poids)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:kg)?\b", lower_text)
+    if not weight_match:
+        weight_match = re.match(r"^\s*(\d{2}(?:[.,]\d+)?)\s*kg\s*$", lower_text)
+
+    if weight_match:
+        logged_weight = float(weight_match.group(1).replace(",", "."))
+        if 40.0 <= logged_weight <= 200.0:
+            log_daily_metric(
+                athlete_id=athlete.get("id"),
+                telegram_id=user_id,
+                weight_kg=logged_weight,
+                notes=user_text
+            )
+
+            history = get_athlete_metrics_history(athlete_id=athlete.get("id"), days=7)
+            weights = [m["weight_kg"] for m in history if m.get("weight_kg") is not None]
+            trend_7d = (weights[-1] - weights[0]) if len(weights) >= 2 else 0.0
+            energies = [m["energy_score"] for m in history if m.get("energy_score") is not None]
+            avg_energy = (sum(energies) / len(energies)) if energies else 7.0
+
+            wisdom = evaluate_wisdom_guidance(
+                weight_trend_7d_kg=trend_7d,
+                avg_energy=avg_energy,
+                current_weight=logged_weight,
+                target_weight=athlete.get("target_weight_kg")
+            )
+
+            await check_and_trigger_coach_alerts(
+                athlete_profile=athlete,
+                event_type="weight_log",
+                data={"weight_kg": logged_weight, "history": history},
+                bot_instance=context.bot
+            )
+
+            tw = athlete.get("target_weight_kg")
+            target_str = f"{float(tw):.1f} kg" if tw else "Non définie (/start)"
+            reply_text = (
+                f"⚖️ <b>PESÉE ENREGISTRÉE : {logged_weight:.1f} kg</b>\n\n"
+                f"🎯 <b>Cible Combat :</b> {target_str}\n"
+                f"📈 <b>Tendance 7j :</b> {trend_7d:+.2f} kg | <b>Énergie moy :</b> {avg_energy:.1f}/10\n\n"
+                f"💡 <b>{wisdom['rule']} :</b>\n<i>{wisdom['message']}</i>\n\n"
+                "🔥 <b>Libertad & Performance.</b>"
+            )
+            await send_safe_html_message(update.message, reply_text)
+            return
+
+    # 2. Détection débriefing de fin de séance
     awaiting_feedback = context.user_data.get("awaiting_workout_feedback", False)
     is_debrief_keywords = any(w in lower_text for w in [
         "séance terminée", "seance terminee", "séance faite", "seance faite",
@@ -542,6 +1016,18 @@ async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_T
         coach_msg = debrief_data.get("coach_reply", "Séance validée guerrier !")
         log_workout_completion(athlete_id=athlete.get("id"), telegram_id=user_id,
                                rpe_real=rpe_val, feedback_text=user_text, completed=True)
+        log_daily_metric(
+            athlete_id=athlete.get("id"),
+            telegram_id=user_id,
+            rpe_real=rpe_val,
+            notes=user_text
+        )
+        await check_and_trigger_coach_alerts(
+            athlete_profile=athlete,
+            event_type="debrief",
+            data={"rpe_real": rpe_val},
+            bot_instance=context.bot
+        )
         context.user_data["awaiting_workout_feedback"] = False
         await send_safe_html_message(update.message, (
             "<b>🥋 DÉBRIEFING ENREGISTRÉ EN BDD !</b>\n\n"
@@ -552,6 +1038,43 @@ async def _process_athlete_input(update: Update, context: ContextTypes.DEFAULT_T
         ))
         return
 
+    # 3. Détection suivi nutritionnel & méthode "Poids de combat"
+    is_nutrition_keywords = any(k in lower_text for k in [
+        "repas", "mangé", "mange", "déjeuner", "dejeuner", "dîner", "diner",
+        "collation", "calories", "calorie", "kcal", "protéines", "proteines",
+        "prot", "glucides", "lipides", "macros", "myfitnesspal", "mfp",
+        "assiette", "balance", "pesée", "pesee", "poids de corps",
+        "lutéale", "luteale", "faim", "craquage", "fringale"
+    ])
+    is_nutrition_only = athlete.get("tracking_type") == "nutrition"
+
+    if is_nutrition_keywords or is_nutrition_only:
+        status_msg = await update.message.reply_text(
+            "🥗 <i>Analyse nutritionnelle en cours via l'IA Samourai...</i>",
+            parse_mode="HTML"
+        )
+        try:
+            nutri_reply = analyze_nutrition_entry(
+                photo_bytes=None,
+                text_content=user_text,
+                athlete_profile=athlete
+            )
+            log_nutrition_entry(
+                athlete_id=athlete.get("id"),
+                telegram_id=user_id,
+                meal_type="texte",
+                analysis_text=nutri_reply,
+                raw_user_input=user_text
+            )
+            await status_msg.delete()
+            await send_safe_html_message(update.message, nutri_reply)
+            return
+        except Exception as e:
+            logger.error(f"Erreur traitement nutrition texte: {e}", exc_info=True)
+            await status_msg.edit_text(f"❌ Erreur lors de l'analyse nutritionnelle : {e}")
+            return
+
+    # 3. Traitement Check-in d'entraînement standard
     try:
         analysis = analyze_checkin_with_gemini(user_text)
         if not analysis.is_valid_checkin:
@@ -606,6 +1129,53 @@ async def handle_checkin_callback(update: Update, context: ContextTypes.DEFAULT_
         await send_safe_html_message(query.message, f"❌ Erreur lors de la génération de la séance : {e}")
 
 
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Gestion des photos envoyées par l'athlète :
+    - Mode A : OCR Visuel de l'assiette (règle des 3 zones : 1/2 légumes, 1/4 protéines, 1/4 glucides).
+    - Mode B : Capture d'écran d'application tierce (MyFitnessPal, macros au gramme près).
+    """
+    if not update.message or not update.message.photo:
+        return
+
+    user = update.effective_user
+    user_id = user.id
+    athlete = get_athlete_profile(user_id)
+    caption = update.message.caption or ""
+
+    status_msg = await update.message.reply_text(
+        "🔍 <i>Analyse de ton repas en cours via l'IA Samourai...</i>",
+        parse_mode="HTML"
+    )
+
+    try:
+        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+        photo_bytes = await photo_file.download_as_bytearray()
+
+        analysis_html = analyze_nutrition_entry(
+            photo_bytes=bytes(photo_bytes),
+            text_content=caption,
+            athlete_profile=athlete,
+            mime_type="image/jpeg"
+        )
+
+        meal_type = "assiette_ocr" if athlete.get("nutrition_mode") == "ocr_vision" else "macros_app"
+        log_nutrition_entry(
+            athlete_id=athlete.get("id"),
+            telegram_id=user_id,
+            meal_type=meal_type,
+            analysis_text=analysis_html,
+            raw_user_input=caption
+        )
+
+        await status_msg.delete()
+        await send_safe_html_message(update.message, analysis_html)
+
+    except Exception as e:
+        logger.error(f"Erreur traitement photo nutrition : {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Erreur lors de l'analyse de la photo : {e}")
+
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Gestion des messages texte de l'athlète.
@@ -657,31 +1227,52 @@ def create_telegram_application():
     request = HTTPXRequest(connect_timeout=20.0, read_timeout=20.0)
     application = ApplicationBuilder().token(token).request(request).build()
 
-    # 1. Tunnel d'Onboarding Interactif (/start)
+    # 1. Tunnel d'Onboarding Interactif (/start) — 5 étapes fluides
     onboarding_conv = ConversationHandler(
         entry_points=[CommandHandler("start", handle_start)],
         states={
             ASK_NAME: [MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_name)],
+            ASK_TRACKING_TYPE: [
+                CallbackQueryHandler(handle_onboarding_tracking_type, pattern="^track_"),
+                MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_tracking_type),
+            ],
+            ASK_NUTRITION_MODE: [
+                CallbackQueryHandler(handle_onboarding_nutrition_mode, pattern="^nutri_"),
+                MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_nutrition_mode),
+            ],
+            ASK_WEIGHT_AND_ACTIVITY: [
+                MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_weight_activity),
+            ],
+            ASK_SERVICE_TIER: [
+                CallbackQueryHandler(handle_onboarding_service_tier, pattern="^(tier_|segment_)"),
+                MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_service_tier),
+            ],
             ASK_GOAL: [MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_goal)],
             ASK_EQUIPMENT: [MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_equipment)],
             ASK_INJURIES: [MessageHandler(filters.TEXT & (~filters.COMMAND), handle_onboarding_injuries)],
         },
         fallbacks=[CommandHandler("cancel", handle_cancel_onboarding)],
-        allow_reentry=True
+        allow_reentry=True,
+        per_message=False
     )
     application.add_handler(onboarding_conv)
 
-    # 2. Commandes Coach & Utilitaires
+    # 2. Commandes Coach, Athlète & Utilitaires
     application.add_handler(CommandHandler("hebdo", handle_hebdo_command))
+    application.add_handler(CommandHandler("bilan", handle_bilan_command))
+    application.add_handler(CommandHandler("tendance", handle_bilan_command))
 
     # 3. Callback Query : check-in smart puis bouton de fin de séance
     application.add_handler(CallbackQueryHandler(handle_checkin_callback, pattern="^checkin_(energy|equipment)_"))
     application.add_handler(CallbackQueryHandler(handle_finish_workout_callback, pattern="^finish_workout$"))
 
-    # 4. Messages Texte (Check-ins et Débriefings hors onboarding)
+    # 4. Messages Photos (OCR assiette 3 zones & MyFitnessPal)
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+
+    # 5. Messages Texte (Check-ins sportifs, Nutrition Poids de combat, Débriefings RPE)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_message))
 
-    # 5. Messages Vocaux
+    # 6. Messages Vocaux (Transcription Gemini puis traitement)
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
 
     _global_telegram_application = application
